@@ -15,7 +15,7 @@
 use futures::StreamExt;
 use futures_async_stream::try_stream;
 use itertools::Itertools;
-use madsim::collections::HashSet;
+use madsim::collections::{HashMap, HashSet};
 use risingwave_common::array::{Array, ArrayRef, DataChunk, Op, Row, RowRef, StreamChunk};
 use risingwave_common::catalog::Schema;
 use risingwave_common::error::{internal_error, Result, RwError};
@@ -529,19 +529,6 @@ impl<K: HashKey, S: StateStore, const T: JoinTypePrimitive> HashJoinExecutor<K, 
         Ok(())
     }
 
-    /// the data the hash table and match the coming
-    /// data chunk with the executor state
-    async fn hash_eq_match<'a>(
-        key: &'a K,
-        ht: &'a mut JoinHashMap<K, S>,
-    ) -> Option<&'a mut HashValueType<S>> {
-        if key.has_null() {
-            None
-        } else {
-            ht.get_mut(key).await
-        }
-    }
-
     fn row_concat(
         row_update: &RowRef<'_>,
         update_start_pos: usize,
@@ -629,114 +616,131 @@ impl<K: HashKey, S: StateStore, const T: JoinTypePrimitive> HashJoinExecutor<K, 
             Ok(cond_match)
         };
 
-        let keys = K::build(&side_update.key_indices, &data_chunk)?;
-        for (idx, (row, op)) in data_chunk.rows().zip_eq(ops.iter()).enumerate() {
-            let key = &keys[idx];
-            let value = row.to_owned_row();
-            let pk = row.row_by_indices(&side_update.pk_indices);
-            let mut matched_rows = Self::hash_eq_match(key, &mut side_match.ht).await;
-            match *op {
-                Op::Insert | Op::UpdateInsert => {
-                    let entry_value = side_update.ht.get_or_init_without_cache(key).await?;
-                    let mut degree = 0;
-                    let mut matched_pks: Vec<Row> = Vec::with_capacity(1);
-                    if let Some(matched_rows) = matched_rows.as_mut() {
-                        for matched_row in (*matched_rows).values_mut(epoch).await {
-                            if check_join_condition(&row, &matched_row.row)? {
-                                degree += 1;
-                                if !forward_exactly_once(T, SIDE) {
-                                    if let Some(chunk) = hashjoin_chunk_builder
-                                        .with_match_on_insert(&row, matched_row)?
-                                    {
-                                        yield Message::Chunk(chunk);
+        let mut key_to_rows = HashMap::new();
+        for (idx, key) in K::build(&side_update.key_indices, &data_chunk)?
+            .iter()
+            .enumerate()
+        {
+            let entry = key_to_rows.entry(key.clone()).or_insert(Vec::new());
+            entry.push(idx);
+        }
+        let mut entries_iter = side_update
+            .ht
+            .iter_keys(&mut side_match.ht, key_to_rows.keys());
+
+        let now = std::time::Instant::now();
+
+        while let Some((key, matched_rows, update_entry)) = entries_iter.next().await {
+            let idxes = key_to_rows.get(key).unwrap();
+            for idx in idxes {
+                let (row, _) = data_chunk.row_at(*idx)?;
+                let op = ops[*idx];
+                let value = row.to_owned_row();
+                let pk = row.row_by_indices(&side_update.pk_indices);
+                match op {
+                    Op::Insert | Op::UpdateInsert => {
+                        let mut degree = 0;
+                        let mut matched_pks: Vec<Row> = Vec::with_capacity(1);
+                        if let Some(matched_rows) = matched_rows.as_mut() {
+                            for matched_row in (*matched_rows).values_mut(epoch).await {
+                                if check_join_condition(&row, &matched_row.row)? {
+                                    degree += 1;
+                                    if !forward_exactly_once(T, SIDE) {
+                                        if let Some(chunk) = hashjoin_chunk_builder
+                                            .with_match_on_insert(&row, matched_row)?
+                                        {
+                                            yield Message::Chunk(chunk);
+                                        }
                                     }
+                                    matched_row.inc_degree();
                                 }
-                                matched_row.inc_degree();
+                                // If the stream is append-only and the join key covers pk in both
+                                // side, then we can remove matched
+                                // rows since pk is unique and will not be
+                                // inserted again
+                                if append_only_optimize {
+                                    let pk_matched =
+                                        matched_row.row_by_indices(&side_match.pk_indices);
+                                    matched_pks.push(pk_matched);
+                                }
                             }
-                            // If the stream is append-only and the join key covers pk in both side,
-                            // then we can remove matched rows since pk is unique and will not be
-                            // inserted again
-                            if append_only_optimize {
-                                let pk_matched = matched_row.row_by_indices(&side_match.pk_indices);
-                                matched_pks.push(pk_matched);
-                            }
-                        }
-                        if degree == 0 {
-                            if let Some(chunk) =
-                                hashjoin_chunk_builder.forward_if_not_matched(*op, &row)?
+                            if degree == 0 {
+                                if let Some(chunk) =
+                                    hashjoin_chunk_builder.forward_if_not_matched(op, &row)?
+                                {
+                                    yield Message::Chunk(chunk);
+                                }
+                            } else if let Some(chunk) =
+                                hashjoin_chunk_builder.forward_exactly_once_if_matched(op, &row)?
                             {
                                 yield Message::Chunk(chunk);
                             }
                         } else if let Some(chunk) =
-                            hashjoin_chunk_builder.forward_exactly_once_if_matched(*op, &row)?
+                            hashjoin_chunk_builder.forward_if_not_matched(op, &row)?
                         {
                             yield Message::Chunk(chunk);
                         }
-                    } else if let Some(chunk) =
-                        hashjoin_chunk_builder.forward_if_not_matched(*op, &row)?
-                    {
-                        yield Message::Chunk(chunk);
-                    }
 
-                    if append_only_optimize {
-                        match matched_rows {
-                            Some(v) => {
-                                // Since join key contains pk and pk is unique, there should be only
-                                // one row if matched
-                                debug_assert!(1 == matched_pks.len());
-                                v.remove(matched_pks.remove(0));
+                        if append_only_optimize {
+                            match matched_rows {
+                                Some(v) => {
+                                    // Since join key contains pk and pk is unique, there should be
+                                    // only one row if matched
+                                    debug_assert!(1 == matched_pks.len());
+                                    v.remove(matched_pks.remove(0));
+                                }
+                                None => {
+                                    update_entry.insert(pk, JoinRow::new(value, degree));
+                                }
                             }
-                            None => {
-                                entry_value.insert(pk, JoinRow::new(value, degree));
-                            }
+                        } else {
+                            update_entry.insert(pk, JoinRow::new(value, degree));
                         }
-                    } else {
-                        entry_value.insert(pk, JoinRow::new(value, degree));
                     }
-                }
-                Op::Delete | Op::UpdateDelete => {
-                    if let Some(v) = side_update.ht.get_mut_without_cached(key).await? {
+                    Op::Delete | Op::UpdateDelete => {
                         // remove the row by it's primary key
-                        v.remove(pk);
-                    }
+                        update_entry.remove(pk);
 
-                    if let Some(matched_rows) = matched_rows {
-                        let mut matched = false;
-                        for matched_row in matched_rows.values_mut(epoch).await {
-                            if check_join_condition(&row, &matched_row.row)? {
-                                matched = true;
-                                matched_row.dec_degree()?;
-                                if !forward_exactly_once(T, SIDE) {
-                                    if let Some(chunk) = hashjoin_chunk_builder
-                                        .with_match_on_delete(&row, matched_row)?
-                                    {
-                                        yield Message::Chunk(chunk);
+                        if let Some(matched_rows) = matched_rows {
+                            let mut matched = false;
+                            for matched_row in matched_rows.values_mut(epoch).await {
+                                if check_join_condition(&row, &matched_row.row)? {
+                                    matched = true;
+                                    matched_row.dec_degree()?;
+                                    if !forward_exactly_once(T, SIDE) {
+                                        if let Some(chunk) = hashjoin_chunk_builder
+                                            .with_match_on_delete(&row, matched_row)?
+                                        {
+                                            yield Message::Chunk(chunk);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        if !matched {
-                            if let Some(chunk) =
-                                hashjoin_chunk_builder.forward_if_not_matched(*op, &row)?
+                            if !matched {
+                                if let Some(chunk) =
+                                    hashjoin_chunk_builder.forward_if_not_matched(op, &row)?
+                                {
+                                    yield Message::Chunk(chunk);
+                                }
+                            } else if let Some(chunk) =
+                                hashjoin_chunk_builder.forward_exactly_once_if_matched(op, &row)?
                             {
                                 yield Message::Chunk(chunk);
                             }
                         } else if let Some(chunk) =
-                            hashjoin_chunk_builder.forward_exactly_once_if_matched(*op, &row)?
+                            hashjoin_chunk_builder.forward_if_not_matched(op, &row)?
                         {
                             yield Message::Chunk(chunk);
                         }
-                    } else if let Some(chunk) =
-                        hashjoin_chunk_builder.forward_if_not_matched(*op, &row)?
-                    {
-                        yield Message::Chunk(chunk);
                     }
                 }
             }
         }
+
         if let Some(chunk) = hashjoin_chunk_builder.take()? {
             yield Message::Chunk(chunk);
         }
+        println!("Elapsed HJ: {}us", now.elapsed().as_micros());
     }
 }
 
@@ -878,10 +882,11 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I")));
 
         // push the init barrier for left and right
         tx_l.push_barrier(1, false);
@@ -891,32 +896,35 @@ mod tests {
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I")));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 2 5 2 7"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 3 6 3 10"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -965,7 +973,11 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(chunk.into_chunk().unwrap(), StreamChunk::from_pretty("I I"));
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I")));
 
         // push the init barrier for left and right
         tx_l.push_barrier(1, false);
@@ -975,58 +987,70 @@ mod tests {
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(chunk.into_chunk().unwrap(), StreamChunk::from_pretty("I I"));
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I")));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 2 5"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 3 6"
-            )
-        );
+            )));
 
         // push the 3rd left chunk (tests forward_exactly_once)
         tx_l.push_chunk(chunk_l3);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 6 10"
-            )
-        );
+            )));
 
         // push the 3rd right chunk
         // (tests that no change if there are still matches)
         tx_r.push_chunk(chunk_r3);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(chunk.into_chunk().unwrap(), StreamChunk::from_pretty("I I"));
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I")));
 
         // push the 3rd left chunk
         // (tests that deletion occurs when there are no more matches)
         tx_r.push_chunk(chunk_r4);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 - 6 10"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1065,10 +1089,11 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I I I")));
 
         // push the init barrier for left and right
         tx_l.push_barrier(1, false);
@@ -1078,34 +1103,37 @@ mod tests {
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I I I")));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I I I
                 + 2 5 2 2 5 1
                 + 4 9 4 4 9 2"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I I I
                 + 1 4 1 1 4 4
                 + 3 6 3 3 6 5"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1144,10 +1172,11 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I")));
 
         // push the init barrier for left and right
         tx_l.push_barrier(1, false);
@@ -1157,34 +1186,37 @@ mod tests {
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I")));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I
                 + 2 5 2
                 + 4 9 4"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I
                 + 1 4 1
                 + 3 6 3"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1223,10 +1255,11 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I")));
 
         // push the init barrier for left and right
         tx_l.push_barrier(1, false);
@@ -1236,34 +1269,37 @@ mod tests {
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I")));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I
                 + 2 5 1
                 + 4 9 2"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I
                 + 1 4 4
                 + 3 6 5"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1312,7 +1348,11 @@ mod tests {
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(chunk.into_chunk().unwrap(), StreamChunk::from_pretty("I I"));
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I")));
 
         // push the init barrier for left and right
         tx_l.push_barrier(1, false);
@@ -1322,58 +1362,70 @@ mod tests {
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(chunk.into_chunk().unwrap(), StreamChunk::from_pretty("I I"));
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I")));
 
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 2 5"
-            )
-        );
+            )));
 
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 3 6"
-            )
-        );
+            )));
 
         // push the 3rd right chunk (tests forward_exactly_once)
         tx_r.push_chunk(chunk_r3);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 6 10"
-            )
-        );
+            )));
 
         // push the 3rd left chunk
         // (tests that no change if there are still matches)
         tx_l.push_chunk(chunk_l3);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(chunk.into_chunk().unwrap(), StreamChunk::from_pretty("I I"));
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I")));
 
         // push the 3rd right chunk
         // (tests that deletion occurs when there are no more matches)
         tx_l.push_chunk(chunk_l4);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 - 6 10"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1424,15 +1476,15 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 1 4
                 + 2 5
                 + 3 6",
-            )
-        );
+            )));
 
         // push the init barrier for left and right
         tx_l.push_barrier(1, false);
@@ -1442,66 +1494,75 @@ mod tests {
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I
                  + 3 8
                  - 3 8",
-            )
-        );
+            )));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 - 2 5"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 - 3 6
                 - 1 4"
-            )
-        );
+            )));
 
         // push the 3rd left chunk (tests forward_exactly_once)
         tx_l.push_chunk(chunk_l3);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 9 10"
-            )
-        );
+            )));
 
         // push the 3rd right chunk
         // (tests that no change if there are still matches)
         tx_r.push_chunk(chunk_r3);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(chunk.into_chunk().unwrap(), StreamChunk::from_pretty("I I"));
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I")));
 
         // push the 4th right chunk
         // (tests that insertion occurs when there are no more matches)
         tx_r.push_chunk(chunk_r4);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 1 4"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1552,15 +1613,16 @@ mod tests {
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 1 4
                 + 2 5
                 + 3 6",
-            )
-        );
+            )));
 
         // push the init barrier for left and right
         tx_r.push_barrier(1, false);
@@ -1570,66 +1632,75 @@ mod tests {
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I
                  + 3 8
                  - 3 8",
-            )
-        );
+            )));
 
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 - 2 5"
-            )
-        );
+            )));
 
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 - 3 6
                 - 1 4"
-            )
-        );
+            )));
 
         // push the 3rd right chunk (tests forward_exactly_once)
         tx_r.push_chunk(chunk_r3);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 9 10"
-            )
-        );
+            )));
 
         // push the 3rd left chunk
         // (tests that no change if there are still matches)
         tx_l.push_chunk(chunk_l3);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(chunk.into_chunk().unwrap(), StreamChunk::from_pretty("I I"));
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I")));
 
         // push the 4th left chunk
         // (tests that insertion occurs when there are no more matches)
         tx_l.push_chunk(chunk_l4);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I
                 + 1 4"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1666,10 +1737,11 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I")));
 
         // push a barrier to left side
         tx_l.push_barrier(2, false);
@@ -1682,13 +1754,14 @@ mod tests {
 
         // Consume stream chunk
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 2 5 2 7"
-            )
-        );
+            )));
 
         // push a barrier to right side
         tx_r.push_barrier(2, false);
@@ -1706,26 +1779,28 @@ mod tests {
 
         // join the 2nd left chunk
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 6 8 6 9"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 3 6 3 10
                 + 3 8 3 10
                 + 6 8 6 11"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1762,10 +1837,11 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I")));
 
         // push a barrier to left side
         tx_l.push_barrier(2, false);
@@ -1778,13 +1854,14 @@ mod tests {
 
         // Consume stream chunk
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 2 . 2 7"
-            )
-        );
+            )));
 
         // push a barrier to right side
         tx_r.push_barrier(2, false);
@@ -1802,26 +1879,28 @@ mod tests {
 
         // join the 2nd left chunk
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 6 . 6 9"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 3 . 3 10
                 + 3 8 3 10
                 + 6 . 6 11"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1858,51 +1937,51 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 1 4 . .
                 + 2 5 . .
                 + 3 6 . ."
-            )
-        );
+            )));
 
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 3 8 . .
                 - 3 8 . ."
-            )
-        );
+            )));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I I I
                 U- 2 5 . .
                 U+ 2 5 2 7"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I I I
                 U- 3 6 . .
                 U+ 3 6 3 10"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -1940,43 +2019,47 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I")));
 
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I")));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 2 5 2 7
                 + . . 4 8
                 + . . 6 9"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + . . 5 10
                 - . . 5 10"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -2015,55 +2098,59 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I I I
                 + 1 4 1 . . .
                 + 2 5 2 . . .
                 + 3 6 3 . . ."
-            )
-        );
+            )));
 
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I I I
                 + 4 9 4 . . .
                 + 5 10 5 . . ."
-            )
-        );
+            )));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I I I I I
                 U- 2 5 2 . . .
                 U+ 2 5 2 2 5 1
                 U- 4 9 4 . . .
                 U+ 4 9 4 4 9 2"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I I I I I
                 U- 1 4 1 . . .
                 U+ 1 4 1 1 4 4
                 U- 3 6 3 . . .
                 U+ 3 6 3 3 6 5"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -2103,44 +2190,48 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I I I")));
 
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I I I")));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I I I I I
                 + 2 5 2 2 5 1
                 + 4 9 4 4 9 2
                 + . . . 6 9 3"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I I I I I
                 + 1 4 1 1 4 4
                 + 3 6 3 3 6 5
                 + . . . 7 7 6"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -2177,53 +2268,57 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 1 4 . .
                 + 2 5 . .
                 + 3 6 . ."
-            )
-        );
+            )));
 
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 3 8 . .
                 - 3 8 . ."
-            )
-        );
+            )));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I I I
                 U- 2 5 . .
                 U+ 2 5 2 7
                 +  . . 4 8
                 +  . . 6 9"
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + . . 5 10
                 - . . 5 10"
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -2263,36 +2358,40 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 1 4 . .
                 + 2 5 . .
                 + 3 6 . .
                 + 3 7 . ."
-            )
-        );
+            )));
 
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 3 8 . .
                 - 3 8 . .
                 - 1 4 . ."
-            )
-        );
+            )));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 "  I I I I
                 U- 2 5 . .
                 U+ 2 5 2 6
@@ -2300,22 +2399,22 @@ mod tests {
                 +  . . 3 4" /* regression test (#2420): 3 4 should be forwarded only once
                              * despite matching on eq join on 2
                              * entries */
-            )
-        );
+            )));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + . . 5 10
                 - . . 5 10
                 + . . 1 2" /* regression test (#2420): 1 2 forwarded even if matches on an empty
                             * join entry */
-            )
-        );
+            )));
     }
 
     #[tokio::test]
@@ -2352,36 +2451,40 @@ mod tests {
         // push the 1st left chunk
         tx_l.push_chunk(chunk_l1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I")));
 
         // push the 2nd left chunk
         tx_l.push_chunk(chunk_l2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I")));
 
         // push the 1st right chunk
         tx_r.push_chunk(chunk_r1);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty("I I I I")
-        );
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty("I I I I")));
 
         // push the 2nd right chunk
         tx_r.push_chunk(chunk_r2);
         let chunk = hash_join.next().await.unwrap().unwrap();
-        assert_eq!(
-            chunk.into_chunk().unwrap(),
-            StreamChunk::from_pretty(
+
+        assert!(chunk
+            .into_chunk()
+            .unwrap()
+            .semantically_equivalent_to(&StreamChunk::from_pretty(
                 " I I I I
                 + 3 6 3 10"
-            )
-        );
+            )));
     }
 }

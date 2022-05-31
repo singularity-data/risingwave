@@ -53,6 +53,7 @@ pub struct JoinEntryState<S: StateStore> {
 }
 
 impl<S: StateStore> JoinEntryState<S> {
+#[allow(unused)]
     pub fn new(
         keyspace: Keyspace<S>,
         data_types: Arc<[DataType]>,
@@ -60,6 +61,20 @@ impl<S: StateStore> JoinEntryState<S> {
     ) -> Self {
         Self {
             cached: None,
+            flush_buffer: BTreeMap::new(),
+            data_types,
+            pk_data_types,
+            keyspace,
+        }
+    }
+
+    pub fn new_with_empty_cache(
+        keyspace: Keyspace<S>,
+        data_types: Arc<[DataType]>,
+        pk_data_types: Arc<[DataType]>,
+    ) -> Self {
+        Self {
+            cached: Some(BTreeMap::new()),
             flush_buffer: BTreeMap::new(),
             data_types,
             pk_data_types,
@@ -151,7 +166,7 @@ impl<S: StateStore> JoinEntryState<S> {
     }
 
     // Fetch cache from the state store.
-    async fn populate_cache(&mut self, epoch: u64) -> Result<()> {
+    pub(crate) async fn populate_cache(&mut self, epoch: u64) -> Result<()> {
         assert!(self.cached.is_none());
 
         let all_data = self.keyspace.scan(None, epoch).await?;
@@ -204,11 +219,16 @@ impl<S: StateStore> JoinEntryState<S> {
         self.cached.as_ref().unwrap().values()
     }
 
+    // TODO: The right semantics here should be to mark the modified join entries as dirty etc...
     pub async fn values_mut(&mut self, epoch: u64) -> JoinEntryStateValuesMut<'_> {
         if self.cached.is_none() {
             self.populate_cache(epoch).await.unwrap();
         }
         self.cached.as_mut().unwrap().values_mut()
+    }
+
+    pub(crate) fn has_cached(&self) -> bool {
+        self.cached.is_some()
     }
 }
 

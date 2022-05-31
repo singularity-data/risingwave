@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::BuildHasher;
 use std::sync::Arc;
@@ -270,6 +271,26 @@ impl StreamChunk {
             ops: self.ops,
             data: self.data.reorder_columns(column_mapping),
         }
+    }
+
+    /// Two `StreamChunk`s are semantically equivalent if every row
+    /// has the same order of updates.
+    pub fn semantically_equivalent_to(&self, other: &Self) -> bool {
+        let mut self_row_updates = HashMap::<Row, Vec<Op>>::new();
+        let mut other_row_updates = HashMap::<Row, Vec<Op>>::new();
+        for (op, row) in self.rows() {
+            let entry = self_row_updates
+                .entry(row.to_owned_row())
+                .or_insert_with(Vec::new);
+            entry.push(op);
+        }
+        for (op, row) in other.rows() {
+            let entry = other_row_updates
+                .entry(row.to_owned_row())
+                .or_insert_with(Vec::new);
+            entry.push(op);
+        }
+        self_row_updates == other_row_updates
     }
 }
 

@@ -77,6 +77,14 @@ impl<K: Hash + Eq, V, S: BuildHasher> EvictableHashMap<K, V, S> {
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
         self.iter_mut().map(|(_k, v)| v)
     }
+
+    pub fn pop(&mut self, k: &K) -> Option<V> {
+        self.inner.pop(k)
+    }
+
+    pub fn push(&mut self, k: K, v: V) {
+        self.inner.push(k, v);
+    }
 }
 
 impl<K, V, S> Deref for EvictableHashMap<K, V, S> {

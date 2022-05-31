@@ -114,11 +114,9 @@ impl JoinRowDeserializer {
 type PkType = Row;
 
 pub type StateValueType = JoinRow;
-pub type HashValueType<S> = JoinEntryState<S>;
 
-pub struct JoinHashMap<K: HashKey, S: StateStore> {
-    /// Store the join states.
-    inner: EvictableHashMap<K, HashValueType<S>, PrecomputedBuildHasher>,
+#[derive(Clone)]
+pub(crate) struct TableInfo<S: StateStore> {
     /// Data types of the columns
     data_types: Arc<[DataType]>,
     /// Data types of the columns
@@ -129,6 +127,13 @@ pub struct JoinHashMap<K: HashKey, S: StateStore> {
     keyspace: Keyspace<S>,
     /// Current epoch
     current_epoch: u64,
+}
+
+pub struct JoinHashMap<K: HashKey, S: StateStore> {
+    /// Store the join states.
+    inner: EvictableHashMap<K, JoinEntryState<S>, PrecomputedBuildHasher>,
+    /// Info about the table data stored
+    table_info: TableInfo<S>,
 }
 
 impl<K: HashKey, S: StateStore> JoinHashMap<K, S> {
@@ -151,152 +156,204 @@ impl<K: HashKey, S: StateStore> JoinHashMap<K, S> {
 
         Self {
             inner: EvictableHashMap::with_hasher(target_cap, PrecomputedBuildHasher),
-            data_types: data_types.into(),
-            join_key_data_types: join_key_data_types.into(),
-            pk_data_types: pk_data_types.into(),
-            keyspace,
-            current_epoch: 0,
+            table_info: TableInfo {
+                data_types: data_types.into(),
+                join_key_data_types: join_key_data_types.into(),
+                pk_data_types: pk_data_types.into(),
+                keyspace,
+                current_epoch: 0,
+            },
         }
     }
 
     pub fn update_epoch(&mut self, epoch: u64) {
-        self.current_epoch = epoch;
+        self.table_info.current_epoch = epoch;
     }
 
-    fn get_state_keyspace(&self, key: &K) -> RwResult<Keyspace<S>> {
+    fn get_state_keyspace(key: &K, table_info: &TableInfo<S>) -> RwResult<Keyspace<S>> {
         // TODO: in pure in-memory engine, we should not do this serialization.
-        let key = key.clone().deserialize(self.join_key_data_types.iter())?;
+        let key = key
+            .clone()
+            .deserialize(table_info.join_key_data_types.iter())?;
         let key_encoded = key.serialize().unwrap();
-        Ok(self.keyspace.append(key_encoded))
-    }
-
-    /// Returns a mutable reference to the value of the key in the memory, if does not exist, look
-    /// up in remote storage and return, if still not exist, return None.
-    #[allow(dead_code)]
-    pub async fn get<'a, 'b>(&'a mut self, key: &'b K) -> Option<&'a HashValueType<S>> {
-        let state = self.inner.get(key);
-        // TODO: we should probably implement a entry function for `LruCache`
-        match state {
-            Some(_) => self.inner.get(key),
-            None => {
-                let remote_state = self.fetch_cached_state(key).await.unwrap();
-                remote_state.map(|rv| {
-                    self.inner.put(key.clone(), rv);
-                    self.inner.get(key).unwrap()
-                })
-            }
-        }
-    }
-
-    /// Returns a mutable reference to the value of the key in the memory, if does not exist, look
-    /// up in remote storage and return, if still not exist, return None.
-    pub async fn get_mut<'a>(&'a mut self, key: &K) -> Option<&'a mut HashValueType<S>> {
-        let state = self.inner.get(key);
-        // TODO: we should probably implement a entry function for `LruCache`
-        match state {
-            Some(_) => self.inner.get_mut(key),
-            None => {
-                let remote_state = self.fetch_cached_state(key).await.unwrap();
-                remote_state.map(|rv| {
-                    self.inner.put(key.clone(), rv);
-                    self.inner.get_mut(key).unwrap()
-                })
-            }
-        }
-    }
-
-    /// Returns a mutable reference to the value of the key in the memory, if does not exist, look
-    /// up in remote storage and return the [`JoinEntryState`] without cached state, if still not
-    /// exist, return None.
-    pub async fn get_mut_without_cached<'a, 'b: 'a>(
-        &'a mut self,
-        key: &'b K,
-    ) -> RwResult<Option<&'a mut HashValueType<S>>> {
-        let state = self.inner.get(key);
-        // TODO: we should probably implement a entry function for `LruCache`
-        match state {
-            Some(_) => Ok(self.inner.get_mut(key)),
-            None => {
-                let keyspace = self.get_state_keyspace(key)?;
-                let all_data = keyspace.scan(None, self.current_epoch).await.unwrap();
-                let total_count = all_data.len();
-                if total_count > 0 {
-                    let state = JoinEntryState::new(
-                        keyspace,
-                        self.data_types.clone(),
-                        self.pk_data_types.clone(),
-                    );
-                    self.inner.put(key.clone(), state);
-                    Ok(Some(self.inner.get_mut(key).unwrap()))
-                } else {
-                    Ok(None)
-                }
-            }
-        }
-    }
-
-    /// Returns true if the key in the memory or remote storage, otherwise false.
-    #[allow(dead_code)]
-    pub async fn contains(&mut self, key: &K) -> bool {
-        let contains = self.inner.contains(key);
-        if contains {
-            true
-        } else {
-            let remote_state = self.fetch_cached_state(key).await.unwrap();
-            match remote_state {
-                Some(rv) => {
-                    self.inner.put(key.clone(), rv);
-                    true
-                }
-                None => false,
-            }
-        }
+        Ok(table_info.keyspace.append(key_encoded))
     }
 
     /// Fetch cache from the state store. Should only be called if the key does not exist in memory.
-    async fn fetch_cached_state(&self, key: &K) -> RwResult<Option<JoinEntryState<S>>> {
-        let keyspace = self.get_state_keyspace(key)?;
+    async fn fetch_cached_state(
+        key: &K,
+        table_info: &TableInfo<S>,
+    ) -> RwResult<Option<JoinEntryState<S>>> {
+        let keyspace = Self::get_state_keyspace(key, table_info)?;
         JoinEntryState::with_cached_state(
             keyspace,
-            self.data_types.clone(),
-            self.pk_data_types.clone(),
-            self.current_epoch,
+            table_info.data_types.clone(),
+            table_info.pk_data_types.clone(),
+            table_info.current_epoch,
         )
         .await
     }
 
     /// Create a [`JoinEntryState`] without cached state. Should only be called if the key
     /// does not exist in memory or remote storage.
-    pub async fn init_without_cache(&mut self, key: &K) -> RwResult<()> {
-        let keyspace = self.get_state_keyspace(key)?;
+    #[allow(unused)]
+    fn init_without_cache(key: &K, table_info: &TableInfo<S>) -> RwResult<JoinEntryState<S>> {
+        let keyspace = Self::get_state_keyspace(key, table_info)?;
         let state = JoinEntryState::new(
             keyspace,
-            self.data_types.clone(),
-            self.pk_data_types.clone(),
+            table_info.data_types.clone(),
+            table_info.pk_data_types.clone(),
         );
-        self.inner.put(key.clone(), state);
-        Ok(())
+        Ok(state)
     }
 
-    /// Get or create a [`JoinEntryState`] without cached state. Should only be called if the key
+    /// Create a [`JoinEntryState`] without cached state. Should only be called if the key
     /// does not exist in memory or remote storage.
-    pub async fn get_or_init_without_cache<'a, 'b: 'a>(
+    fn init_with_empty_cache(key: &K, table_info: &TableInfo<S>) -> RwResult<JoinEntryState<S>> {
+        let keyspace = Self::get_state_keyspace(key, table_info)?;
+        let state = JoinEntryState::new_with_empty_cache(
+            keyspace,
+            table_info.data_types.clone(),
+            table_info.pk_data_types.clone(),
+        );
+        Ok(state)
+    }
+
+    pub fn pop_cached(&mut self, key: &K) -> Option<JoinEntryState<S>> {
+        self.inner.pop(key)
+    }
+
+    pub fn push(&mut self, key: K, state: JoinEntryState<S>) {
+        self.inner.push(key, state);
+    }
+
+    // Iter keys on the
+    pub(crate) fn iter_keys<'a>(
         &'a mut self,
-        key: &'b K,
-    ) -> RwResult<&'a mut JoinEntryState<S>> {
-        // TODO: we should probably implement a entry function for `LruCache`
-        let contains = self.inner.contains(key);
-        if contains {
-            Ok(self.inner.get_mut(key).unwrap())
-        } else {
-            self.init_without_cache(key).await?;
-            Ok(self.inner.get_mut(key).unwrap())
+        side_match: &'a mut Self,
+        keys: impl Iterator<Item = &'a K>,
+    ) -> IterJoinEntriesMut<'a, K, S> {
+        IterJoinEntriesMut::<'a>::new(self.table_info.current_epoch, side_match, self, keys)
+    }
+}
+
+type IterType<K, S> = (K, Option<JoinEntryState<S>>, JoinEntryState<S>);
+
+/// Iterates
+pub(crate) struct IterJoinEntriesMut<'a, K: HashKey, S: StateStore> {
+    side_match: &'a mut JoinHashMap<K, S>,
+    side_update: &'a mut JoinHashMap<K, S>,
+    last_item: Option<IterType<K, S>>,
+    queue: tokio::sync::mpsc::UnboundedReceiver<IterType<K, S>>, /* TODO: change this to a
+                                                                  * reasonably
+                                                                  * sized bounded queue... */
+}
+
+impl<'a, K: HashKey, S: StateStore> IterJoinEntriesMut<'a, K, S> {
+    pub(crate) fn new(
+        epoch: u64,
+        side_match: &'a mut JoinHashMap<K, S>,
+        side_update: &'a mut JoinHashMap<K, S>,
+        keys: impl Iterator<Item = &'a K>,
+    ) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<IterType<K, S>>();
+        let new_iter = Self {
+            side_match,
+            side_update,
+            last_item: None,
+            queue: rx,
+        };
+
+        let start = std::time::Instant::now();
+        let mut cache_miss_counter = 0;
+        let mut total_counter = 0;
+
+        for key in keys {
+            total_counter += 1;
+            let update_entry = new_iter.side_update.pop_cached(key);
+            let match_entry = if key.has_null() {
+                None
+            } else {
+                new_iter.side_match.pop_cached(key)
+            };
+            let key = key.clone();
+            let update_table_info = &new_iter.side_update.table_info;
+
+            let update_entry = update_entry.unwrap_or_else(|| {
+                JoinHashMap::<K, S>::init_with_empty_cache(&key, update_table_info)
+                    .ok()
+                    .unwrap()
+            });
+
+            if key.has_null() {
+                tx.send((key, None, update_entry)).ok().unwrap()
+            } else if let Some(mut maybe_cached) = match_entry {
+                if maybe_cached.has_cached() {
+                    tx.send((key, Some(maybe_cached), update_entry))
+                        .ok()
+                        .unwrap()
+                } else {
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        maybe_cached.populate_cache(epoch).await.ok().unwrap();
+                        tx.send((key, Some(maybe_cached), update_entry))
+                            .ok()
+                            .unwrap()
+                    });
+                }
+            } else {
+                cache_miss_counter += 1;
+                // tx.send((key, None, update_entry))
+                //     .ok()
+                //     .expect("Failed to send join entries for join key");
+                let match_table_info = new_iter.side_match.table_info.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let match_entry =
+                        JoinHashMap::<K, S>::fetch_cached_state(&key, &match_table_info)
+                            .await
+                            .ok()
+                            .unwrap();
+                    tx.send((key, match_entry, update_entry)).ok().unwrap()
+                });
+            }
+        }
+
+        println!(
+            "Elapsed: {}us. Cache miss/total: {}/{}",
+            start.elapsed().as_micros(),
+            cache_miss_counter,
+            total_counter
+        );
+
+        new_iter
+    }
+
+    pub(crate) async fn next(&mut self) -> Option<&mut IterType<K, S>> {
+        if let Some(last) = self.last_item.take() {
+            if let Some(matches) = last.1 {
+                self.side_match.push(last.0.clone(), matches);
+            }
+            self.side_update.push(last.0, last.2);
+        }
+        self.last_item = self.queue.recv().await;
+        self.last_item.as_mut()
+    }
+}
+
+impl<'a, K: HashKey, S: StateStore> Drop for IterJoinEntriesMut<'a, K, S> {
+    fn drop(&mut self) {
+        if let Some(last) = self.last_item.take() {
+            if let Some(matches) = last.1 {
+                self.side_match.push(last.0.clone(), matches);
+            }
+            self.side_update.push(last.0, last.2);
         }
     }
 }
 
 impl<K: HashKey, S: StateStore> Deref for JoinHashMap<K, S> {
-    type Target = EvictableHashMap<K, HashValueType<S>, PrecomputedBuildHasher>;
+    type Target = EvictableHashMap<K, JoinEntryState<S>, PrecomputedBuildHasher>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
