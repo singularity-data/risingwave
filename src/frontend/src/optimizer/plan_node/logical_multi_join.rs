@@ -14,6 +14,7 @@
 
 use std::fmt;
 
+use itertools::Itertools;
 use risingwave_common::error::{ErrorCode, Result, RwError};
 use risingwave_pb::plan_common::JoinType;
 
@@ -44,7 +45,23 @@ impl fmt::Display for LogicalMultiJoin {
 }
 
 impl LogicalMultiJoin {
-    pub(crate) fn new(base: PlanBase, inputs: Vec<PlanRef>, on: Condition) -> Self {
+    pub(crate) fn new(inputs: Vec<PlanRef>, on: Condition) -> Self {
+        let inputs_len = inputs.len();
+        let ctx = inputs[0].ctx();
+
+        // TODO: better way to deduce schema and pk instead of creating new plan nodes
+        let pseudo_node = Self {
+            base: inputs[0].plan_base().clone(),
+            inputs: inputs.clone(),
+            on: on.clone(),
+        };
+        let pseudo_node = pseudo_node.as_reordered_left_deep_join(&(0..inputs_len).collect_vec());
+
+        let base = PlanBase::new_logical(
+            ctx,
+            pseudo_node.schema().clone(),
+            pseudo_node.pk_indices().to_vec(),
+        );
         Self { base, inputs, on }
     }
 
@@ -78,6 +95,7 @@ impl LogicalMultiJoin {
             inputs.push(right.clone());
         }
 
+        // TODO: derive schema and pk
         Some(Self {
             base: logical_join.base.clone(),
             inputs,
@@ -90,6 +108,7 @@ impl LogicalMultiJoin {
         let input = logical_filter.input();
         let multijoin = input.as_logical_multi_join()?;
 
+        // TODO: derive schema and pk
         Some(Self {
             base: logical_filter.base.clone(),
             inputs: multijoin.inputs().to_vec(),
@@ -107,7 +126,7 @@ impl LogicalMultiJoin {
 
     /// Clone with new `on` condition
     pub fn clone_with_cond(&self, cond: Condition) -> Self {
-        Self::new(self.base.clone(), self.inputs.clone(), cond)
+        Self::new(self.inputs.clone(), cond)
     }
 }
 
@@ -118,14 +137,8 @@ impl PlanTreeNode for LogicalMultiJoin {
         vec
     }
 
-    fn clone_with_inputs(
-        &self,
-        _inputs: &[crate::optimizer::PlanRef],
-    ) -> crate::optimizer::PlanRef {
-        panic!(
-            "Method not available for `LogicalMultiJoin` which is a placeholder node with \
-             a temporary lifetime. It only facilitates join reordering during logical planning."
-        )
+    fn clone_with_inputs(&self, inputs: &[crate::optimizer::PlanRef]) -> crate::optimizer::PlanRef {
+        Self::new(inputs.to_vec(), self.on.clone()).into()
     }
 }
 

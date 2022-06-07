@@ -117,8 +117,8 @@ impl Condition {
     /// bucket0: col0, col1, col2 | bucket1: col3, col4 | bucket2: col5
     /// `input_num_cols` = [3, 2, 1]
     ///
-    /// Returns hashmap with keys of the form (col1, col2) where col1 < col2 in terms of their col
-    /// index.
+    /// Returns hashmap with keys of the form (bucket0, bucket1) where bucket0 < bucket1 in terms of
+    /// their bucket index.
     ///
     /// `only_eq`: whether to only split those conditions with an eq condition predicate between two
     /// buckets.
@@ -141,9 +141,9 @@ impl Condition {
         for expr in self.conjunctions {
             let input_bits = expr.collect_input_refs(cols_seen);
             let mut subset_indices = Vec::with_capacity(input_col_nums.len());
-            for (idx, bitmap) in bitmaps.iter().enumerate() {
+            for (bucket_idx, bitmap) in bitmaps.iter().enumerate() {
                 if !input_bits.is_disjoint(bitmap) {
-                    subset_indices.push(idx);
+                    subset_indices.push(bucket_idx);
                 }
             }
             if subset_indices.len() != 2 || (only_eq && Self::as_eq_cond(&expr).is_none()) {
@@ -171,7 +171,7 @@ impl Condition {
 
     /// Returns the `InputRefs` of an Equality predicate if it matches
     /// ordered by the canonical ordering (lower, higher), else returns None
-    fn as_eq_cond(expr: &ExprImpl) -> Option<(InputRef, InputRef)> {
+    pub fn as_eq_cond(expr: &ExprImpl) -> Option<(InputRef, InputRef)> {
         if let ExprImpl::FunctionCall(function_call) = expr.clone()
             && function_call.get_expr_type() == ExprType::Equal
             && let (_, ExprImpl::InputRef(x), ExprImpl::InputRef(y)) = function_call.decompose_as_binary()

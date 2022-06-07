@@ -35,6 +35,8 @@ mod unnest_agg_for_loj;
 pub use unnest_agg_for_loj::*;
 mod pull_up_correlated_predicate;
 pub use pull_up_correlated_predicate::*;
+mod index_delta_join_new;
+pub use index_delta_join_new::*;
 mod index_delta_join;
 pub use index_delta_join::*;
 mod multijoin_filter;

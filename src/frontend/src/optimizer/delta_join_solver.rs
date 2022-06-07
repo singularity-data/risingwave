@@ -234,7 +234,7 @@ pub struct DeltaJoinSolver {
 /// c -> a  -> b  ->
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LookupPath(JoinTable, pub Vec<JoinTable>);
+pub struct LookupPath(pub JoinTable, pub Vec<JoinTable>);
 
 struct SolverEnv {
     /// Stores all join edges in map. [`JoinEdge`]'s left side is always the key in map.

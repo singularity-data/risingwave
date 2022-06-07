@@ -22,9 +22,9 @@ use super::super::plan_node::*;
 use super::{BoxedRule, Rule};
 
 /// Use index scan and delta joins for supported queries.
-pub struct IndexDeltaJoinRule {}
+pub struct IndexDeltaJoinRuleLegacy {}
 
-impl Rule for IndexDeltaJoinRule {
+impl Rule for IndexDeltaJoinRuleLegacy {
     fn apply(&self, plan: PlanRef) -> Option<PlanRef> {
         let join = plan.as_stream_hash_join()?;
         if join.eq_join_predicate().has_non_eq() || join.join_type() != JoinType::Inner {
@@ -124,7 +124,7 @@ impl Rule for IndexDeltaJoinRule {
     }
 }
 
-impl IndexDeltaJoinRule {
+impl IndexDeltaJoinRuleLegacy {
     pub fn create() -> BoxedRule {
         Box::new(Self {})
     }

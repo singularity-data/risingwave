@@ -236,6 +236,7 @@ mod logical_project;
 mod logical_scan;
 mod logical_source;
 mod logical_topn;
+mod logical_union;
 mod logical_update;
 mod logical_values;
 mod stream_delta_join;
@@ -283,6 +284,7 @@ pub use logical_project::LogicalProject;
 pub use logical_scan::LogicalScan;
 pub use logical_source::LogicalSource;
 pub use logical_topn::LogicalTopN;
+pub use logical_union::{LogicalUnion, UnionMode};
 pub use logical_update::LogicalUpdate;
 pub use logical_values::LogicalValues;
 pub use stream_delta_join::StreamDeltaJoin;
@@ -334,7 +336,7 @@ macro_rules! for_all_plan_nodes {
             , { Logical, HopWindow }
             , { Logical, GenerateSeries }
             , { Logical, MultiJoin }
-            // , { Logical, Sort } we don't need a LogicalSort, just require the Order
+            , { Logical, Union }
             , { Batch, SimpleAgg }
             , { Batch, HashAgg }
             , { Batch, Project }
@@ -391,8 +393,7 @@ macro_rules! for_logical_plan_nodes {
             , { Logical, HopWindow }
             , { Logical, GenerateSeries }
             , { Logical, MultiJoin }
-            // , { Logical, Sort} not sure if we will support Order by clause in subquery/view/MV
-            // if we dont support thatk, we don't need LogicalSort, just require the Order at the top of query
+            , { Logical, Union }
         }
     };
 }

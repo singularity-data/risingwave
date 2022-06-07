@@ -141,7 +141,8 @@ impl LogicalScan {
         self.table_desc.as_ref()
     }
 
-    /// Get a reference to the logical scan's table desc.
+    /// Get a reference to the logical scan's table desc. The columns are not exactly the same as
+    /// the original table as being pruned, but will have the same order as the required input.
     #[must_use]
     pub fn column_descs(&self) -> Vec<ColumnDesc> {
         self.output_col_idx
