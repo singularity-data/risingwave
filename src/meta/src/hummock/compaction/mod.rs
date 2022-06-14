@@ -14,7 +14,7 @@
 
 pub mod compaction_config;
 mod compaction_picker;
-mod level_selector;
+pub mod level_selector;
 mod overlap_strategy;
 mod prost_type;
 mod tier_compaction_picker;
@@ -28,25 +28,33 @@ use risingwave_hummock_sdk::{CompactionGroupId, HummockCompactionTaskId, Hummock
 use risingwave_pb::hummock::compaction_config::CompactionMode;
 use risingwave_pb::hummock::{CompactTask, CompactionConfig, HummockVersion, KeyRange, Level};
 
-use crate::hummock::compaction::level_selector::{DynamicLevelSelector, LevelSelector};
+use crate::hummock::compaction::level_selector::{
+    DynamicLevelSelector, HashMappingSelector, LevelSelector,
+};
 use crate::hummock::compaction::overlap_strategy::{
     HashStrategy, OverlapStrategy, RangeOverlapStrategy,
 };
 use crate::hummock::level_handler::LevelHandler;
+use crate::manager::HashMappingManagerRef;
 
 pub struct CompactStatus {
     compaction_group_id: CompactionGroupId,
     pub(crate) level_handlers: Vec<LevelHandler>,
     // TODO: remove this `CompactionConfig`, which is a duplicate of that in `CompactionGroup`.
     compaction_config: CompactionConfig,
-    compaction_selector: Arc<dyn LevelSelector>,
+    pub(crate) compaction_selectors: Vec<Arc<dyn LevelSelector>>,
 }
 
 impl Debug for CompactStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut nameset = String::new();
+        for selector in &self.compaction_selectors {
+            nameset += selector.name();
+            nameset += " | ";
+        }
         f.debug_struct("CompactStatus")
             .field("level_handlers", &self.level_handlers)
-            .field("compaction_selector", &self.compaction_selector.name())
+            .field("compaction_selector", &nameset)
             .finish()
     }
 }
@@ -54,7 +62,15 @@ impl Debug for CompactStatus {
 impl PartialEq for CompactStatus {
     fn eq(&self, other: &Self) -> bool {
         self.level_handlers.eq(&other.level_handlers)
-            && self.compaction_selector.name() == other.compaction_selector.name()
+            && self.compaction_selectors.len() == other.compaction_selectors.len()
+            && {
+                for i in 0..self.compaction_selectors.len() {
+                    if self.compaction_selectors[i].name() != other.compaction_selectors[i].name() {
+                        return false;
+                    }
+                }
+                true
+            }
             && self.compaction_config == other.compaction_config
     }
 }
@@ -65,7 +81,7 @@ impl Clone for CompactStatus {
             compaction_group_id: self.compaction_group_id,
             level_handlers: self.level_handlers.clone(),
             compaction_config: self.compaction_config.clone(),
-            compaction_selector: self.compaction_selector.clone(),
+            compaction_selectors: self.compaction_selectors.clone(),
         }
     }
 }
@@ -87,6 +103,7 @@ impl CompactStatus {
     pub fn new(
         compaction_group_id: CompactionGroupId,
         config: Arc<CompactionConfig>,
+        hash_mapping_manager: HashMappingManagerRef,
     ) -> CompactStatus {
         let mut level_handlers = vec![];
         for level in 0..=config.max_level {
@@ -97,7 +114,12 @@ impl CompactStatus {
             compaction_group_id,
             level_handlers,
             compaction_config: (*config).clone(),
-            compaction_selector: Arc::new(DynamicLevelSelector::new(config, overlap_strategy)),
+            compaction_selectors: vec![
+                Arc::new(DynamicLevelSelector::new(config, overlap_strategy)),
+                Arc::new(HashMappingSelector {
+                    hash_mapping_manager,
+                }),
+            ],
         }
     }
 
@@ -148,8 +170,13 @@ impl CompactStatus {
         levels: &[Level],
         task_id: HummockCompactionTaskId,
     ) -> Option<SearchResult> {
-        self.compaction_selector
-            .pick_compaction(task_id, levels, &mut self.level_handlers)
+        for selector in &self.compaction_selectors {
+            let result = selector.pick_compaction(task_id, levels, &mut self.level_handlers);
+            if result.is_some() {
+                return result;
+            }
+        }
+        None
     }
 
     /// Declares a task is either finished or canceled.

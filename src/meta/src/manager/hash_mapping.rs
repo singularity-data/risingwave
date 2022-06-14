@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use risingwave_common::consistent_hash::{VirtualNode, VIRTUAL_NODE_COUNT};
-use risingwave_pb::common::ParallelUnit;
+use risingwave_pb::common::{ParallelUnit, VNodeBitmap};
 
 use super::TableId;
 use crate::cluster::ParallelUnitId;
@@ -97,6 +97,59 @@ impl HashMappingManager {
     pub fn get_need_consolidation(&self) -> bool {
         let core = self.core.lock();
         core.need_sst_consolidation
+    }
+
+    pub fn check_sst_deprecated(&self, vnode_bitmaps: &[VNodeBitmap]) -> bool {
+        let core = self.core.lock();
+        let mut unit: Option<u64> = None;
+        for vnode_bitmap in vnode_bitmaps {
+            let mut is_dummy = false;
+            if let Some(fragment_id) = core
+                .state_table_fragment_mapping
+                .get(&vnode_bitmap.get_table_id())
+            {
+                if let Some(HashMappingInfo { vnode_mapping, .. }) =
+                    core.hash_mapping_infos.get(fragment_id)
+                {
+                    let len = vnode_bitmap.get_bitmap().len();
+                    for i in 0..len {
+                        for j in 0..u8::BITS {
+                            if vnode_bitmap.get_bitmap()[i] & (1 << j) != 0 {
+                                let cur = vnode_mapping[i * u8::BITS as usize + j as usize] as u64;
+                                match unit {
+                                    Some(pre) => {
+                                        if cur != pre {
+                                            return true;
+                                        }
+                                    }
+                                    None => {
+                                        unit = Some(cur);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    is_dummy = true;
+                }
+            } else {
+                is_dummy = true;
+            }
+            if is_dummy {
+                let cur = u64::MAX;
+                match unit {
+                    Some(pre) => {
+                        if cur != pre {
+                            return true;
+                        }
+                    }
+                    None => {
+                        unit = Some(cur);
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// For test.
@@ -226,7 +279,7 @@ impl HashMappingManagerCore {
 mod tests {
     use itertools::Itertools;
     use risingwave_common::consistent_hash::VIRTUAL_NODE_COUNT;
-    use risingwave_pb::common::{ParallelUnit, ParallelUnitType};
+    use risingwave_pb::common::{ParallelUnit, ParallelUnitType, VNodeBitmap};
 
     use super::{HashMappingInfo, HashMappingManager};
 
@@ -355,5 +408,53 @@ mod tests {
             .unwrap();
         less_counts.sort();
         assert_eq!(less_counts, vec![4u32, 5]);
+    }
+
+    #[test]
+    fn test_check_sst_deprecated() {
+        let parallel_unit_count = 6usize;
+        let parallel_units = (1..parallel_unit_count + 1)
+            .map(|id| ParallelUnit {
+                id: id as u32,
+                r#type: ParallelUnitType::Hash as i32,
+                worker_node_id: 1,
+            })
+            .collect_vec();
+        let hash_mapping_manager = HashMappingManager::new();
+
+        let fragment_id = 1u32;
+        hash_mapping_manager.build_fragment_hash_mapping(fragment_id, &parallel_units);
+        let vnode_mapping = hash_mapping_manager
+            .get_fragment_hash_mapping(&fragment_id)
+            .unwrap();
+
+        let table_id = 2u32;
+        hash_mapping_manager.set_fragment_state_table(fragment_id, table_id);
+        assert_eq!(
+            hash_mapping_manager
+                .get_table_hash_mapping(&table_id)
+                .unwrap(),
+            vnode_mapping
+        );
+
+        let full_bitmap = VNodeBitmap {
+            table_id,
+            bitmap: [u8::MAX; VIRTUAL_NODE_COUNT / u8::BITS as usize].to_vec(),
+        };
+        assert!(hash_mapping_manager.check_sst_deprecated(&[full_bitmap]));
+
+        let mut bitmap = [0; VIRTUAL_NODE_COUNT / u8::BITS as usize].to_vec();
+        for i in 0..VIRTUAL_NODE_COUNT / parallel_unit_count {
+            bitmap[i / u8::BITS as usize] |= 1 << (i % u8::BITS as usize);
+        }
+        let fresh_bitmap = VNodeBitmap { table_id, bitmap };
+        assert!(!hash_mapping_manager.check_sst_deprecated(&[fresh_bitmap]));
+
+        bitmap = [0; VIRTUAL_NODE_COUNT / u8::BITS as usize].to_vec();
+        for i in 0..VIRTUAL_NODE_COUNT / parallel_unit_count + 1 {
+            bitmap[i / u8::BITS as usize] |= 1 << (i % u8::BITS as usize);
+        }
+        let stale_bitmap = VNodeBitmap { table_id, bitmap };
+        assert!(hash_mapping_manager.check_sst_deprecated(&[stale_bitmap]));
     }
 }

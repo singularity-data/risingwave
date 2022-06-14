@@ -30,6 +30,7 @@ use crate::hummock::compaction::tier_compaction_picker::{
 };
 use crate::hummock::compaction::{create_overlap_strategy, SearchResult};
 use crate::hummock::level_handler::LevelHandler;
+use crate::manager::HashMappingManagerRef;
 
 const SCORE_BASE: u64 = 100;
 
@@ -241,6 +242,57 @@ impl LevelSelector for DynamicLevelSelector {
 
     fn name(&self) -> &'static str {
         "DynamicLevelSelector"
+    }
+}
+
+pub struct HashMappingSelector {
+    pub hash_mapping_manager: HashMappingManagerRef,
+}
+
+impl LevelSelector for HashMappingSelector {
+    fn need_compaction(&self, _: &[Level], _: &mut [LevelHandler]) -> bool {
+        true
+    }
+
+    fn pick_compaction(
+        &self,
+        task_id: HummockCompactionTaskId,
+        levels: &[Level],
+        level_handlers: &mut [LevelHandler],
+    ) -> Option<SearchResult> {
+        for level in levels.iter().rev() {
+            let level_idx = level.level_idx as usize;
+            for table in &level.table_infos {
+                if !level_handlers[level_idx].is_pending_compact(&table.id)
+                    && self
+                        .hash_mapping_manager
+                        .check_sst_deprecated(table.get_vnode_bitmaps())
+                {
+                    let select_input_ssts = vec![table.clone()];
+                    level_handlers[level_idx].add_pending_task(task_id, &select_input_ssts);
+                    return Some(SearchResult {
+                        select_level: Level {
+                            level_idx: level_idx as u32,
+                            level_type: levels[level_idx].level_type,
+                            table_infos: select_input_ssts,
+                            total_file_size: 0,
+                        },
+                        target_level: Level {
+                            level_idx: level_idx as u32,
+                            level_type: levels[level_idx].level_type,
+                            table_infos: vec![],
+                            total_file_size: 0,
+                        },
+                        split_ranges: vec![],
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    fn name(&self) -> &'static str {
+        "HashMappingSelector"
     }
 }
 
