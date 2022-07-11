@@ -35,6 +35,7 @@ use risingwave_hummock_sdk::key_range::KeyRange;
 use risingwave_hummock_sdk::{CompactionGroupId, HummockSSTableId, VersionedComparator};
 use risingwave_pb::hummock::{CompactTask, SstableInfo, SubscribeCompactTasksResponse, VacuumTask};
 use risingwave_rpc_client::HummockMetaClient;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot::Sender;
 use tokio::task::JoinHandle;
 
@@ -47,14 +48,14 @@ use super::{
 use crate::hummock::compaction_executor::CompactionExecutor;
 use crate::hummock::group_builder::KeyValueGrouping;
 use crate::hummock::iterator::ReadOptions;
-use crate::hummock::multi_builder::SealedSstableBuilder;
+use crate::hummock::multi_builder::{do_upload, SealedSstableBuilder, UploadRequest};
 use crate::hummock::shared_buffer::shared_buffer_uploader::UploadTaskPayload;
 use crate::hummock::shared_buffer::{build_ordered_merge_iter, UncommittedData};
 use crate::hummock::sstable_store::SstableStoreRef;
 use crate::hummock::state_store::ForwardIter;
 use crate::hummock::utils::can_concat;
 use crate::hummock::vacuum::Vacuum;
-use crate::hummock::{CachePolicy, HummockError};
+use crate::hummock::{CachePolicy, HummockError, SstableStore};
 use crate::monitor::{StateStoreMetrics, StoreLocalStatistic};
 
 pub type SstableIdGenerator =
@@ -647,6 +648,23 @@ impl Compactor {
         }
     }
 
+    async fn start_uploading_task_coordinator(
+        sstable_store: Arc<SstableStore>,
+        mut receiver: mpsc::UnboundedReceiver<UploadRequest>,
+    ) {
+        while let Some(request) = receiver.recv().await {
+            let ret = do_upload(
+                sstable_store.clone(),
+                request.id,
+                request.data,
+                request.meta,
+                request.policy,
+            )
+            .await;
+            request.grant_sender.send(ret).unwrap();
+        }
+    }
+
     /// Compact the given key range and merge iterator.
     /// Upon a successful return, the built SSTs are already uploaded to object store.
     async fn compact_key_range_impl(
@@ -677,6 +695,12 @@ impl Compactor {
             max_target_file_size,
         );
 
+        let (uploading_event_sender, uploading_event_receiver) = mpsc::unbounded_channel();
+        tokio::spawn(Compactor::start_uploading_task_coordinator(
+            self.context.sstable_store.clone(),
+            uploading_event_receiver,
+        ));
+
         // NOTICE: should be user_key overlap, NOT full_key overlap!
         let mut builder = GroupedSstableBuilder::new(
             || async {
@@ -698,6 +722,7 @@ impl Compactor {
             VirtualNodeGrouping::new(vnode2unit),
             cache_policy,
             self.context.sstable_store.clone(),
+            Some(uploading_event_sender),
         );
 
         // Monitor time cost building shared buffer to SSTs.

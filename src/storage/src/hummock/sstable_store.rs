@@ -31,7 +31,7 @@ const MIN_BUFFER_SIZE_PER_SHARD: usize = 256 * 1024 * 1024; // 256MB
 pub type TableHolder = CachableEntry<HummockSSTableId, Box<Sstable>>;
 
 // TODO: Define policy based on use cases (read / compaction / ...).
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CachePolicy {
     /// Disable read cache and not fill the cache afterwards.
     Disable,

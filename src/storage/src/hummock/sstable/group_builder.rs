@@ -20,8 +20,11 @@ use itertools::Itertools;
 use risingwave_hummock_sdk::compaction_group::StateTableId;
 use risingwave_hummock_sdk::key::{get_table_id, FullKey};
 use risingwave_hummock_sdk::CompactionGroupId;
+use tokio::sync::mpsc;
 
-use crate::hummock::multi_builder::{CapacitySplitTableBuilder, SealedSstableBuilder};
+use crate::hummock::multi_builder::{
+    CapacitySplitTableBuilder, SealedSstableBuilder, UploadRequest,
+};
 use crate::hummock::sstable_store::SstableStoreRef;
 use crate::hummock::value::HummockValue;
 use crate::hummock::{CachePolicy, HummockResult, SSTableBuilder};
@@ -110,6 +113,7 @@ pub struct GroupedSstableBuilder<B, G: KeyValueGrouping> {
     builders: HashMap<KeyValueGroupId, CapacitySplitTableBuilder<B>>,
     sstable_store: SstableStoreRef,
     policy: CachePolicy,
+    uploading_sender: Option<mpsc::UnboundedSender<UploadRequest>>,
 }
 
 impl<B, G, F> GroupedSstableBuilder<B, G>
@@ -123,6 +127,7 @@ where
         grouping: G,
         policy: CachePolicy,
         sstable_store: SstableStoreRef,
+        uploading_sender: Option<mpsc::UnboundedSender<UploadRequest>>,
     ) -> Self {
         Self {
             get_id_and_builder,
@@ -130,6 +135,7 @@ where
             builders: Default::default(),
             sstable_store,
             policy,
+            uploading_sender,
         }
     }
 
@@ -153,6 +159,7 @@ where
                 self.get_id_and_builder.clone(),
                 self.policy,
                 self.sstable_store.clone(),
+                self.uploading_sender.clone(),
             )
         });
         entry.add_full_key(full_key, value, allow_split).await
@@ -218,6 +225,7 @@ mod tests {
             grouping,
             CachePolicy::Disable,
             mock_sstable_store(),
+            None,
         );
         for i in 0..10 {
             // key value belongs to no compaction group
@@ -291,6 +299,7 @@ mod tests {
             grouping.clone(),
             CachePolicy::Disable,
             mock_sstable_store(),
+            None,
         );
         for i in 0..2 {
             // key value matches table and mapping
@@ -320,6 +329,7 @@ mod tests {
             grouping.clone(),
             CachePolicy::Disable,
             mock_sstable_store(),
+            None,
         );
         for i in 0..10 {
             // key value matches table and mapping
@@ -348,6 +358,7 @@ mod tests {
             grouping.clone(),
             CachePolicy::Disable,
             mock_sstable_store(),
+            None,
         );
         builder
             .add_full_key(
