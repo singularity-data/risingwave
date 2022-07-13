@@ -40,10 +40,6 @@ enum StreamExecutorErrorInner {
     #[error("Serialize/deserialize error: {0}")]
     SerdeError(BoxedError),
 
-    // TODO: remove this
-    #[error("Source error: {0}")]
-    SourceError(RwError),
-
     #[error("Sink error: {0}")]
     SinkError(RwError),
 
@@ -71,10 +67,6 @@ impl StreamExecutorError {
 
     pub fn serde_error(error: impl Error) -> Self {
         StreamExecutorErrorInner::SerdeError(error.into()).into()
-    }
-
-    pub fn source_error(error: impl Into<RwError>) -> Self {
-        StreamExecutorErrorInner::SourceError(error.into()).into()
     }
 
     pub fn sink_error(error: impl Into<RwError>) -> Self {
