@@ -40,18 +40,15 @@ impl Binder {
             Some(t) => t,
             None => return Ok(None),
         };
+        self.push_lateral_context();
         let mut root = self.bind_table_with_joins(first)?;
+        self.pop_and_merge_lateral_context()?;
         for t in from_iter {
+            self.push_lateral_context();
             let right = self.bind_table_with_joins(t.clone())?;
-            if let Relation::Subquery(subquery) = &right {
-                if subquery.query.is_correlated() {
-                    return Err(ErrorCode::BindError(format!(
-                        "Join table \"{}\" has correlated input reference",
-                        t
-                    ))
-                    .into());
-                }
-            }
+            self.pop_and_merge_lateral_context()?;
+            // Any FROM subquery, not having access to the lateral context, cannot be correlated at
+            // this depth unless it is lateral
             root = Relation::Join(Box::new(BoundJoin {
                 join_type: JoinType::Inner,
                 left: root,
@@ -62,7 +59,12 @@ impl Binder {
         Ok(Some(root))
     }
 
-    fn bind_table_with_joins(&mut self, table: TableWithJoins) -> Result<Relation> {
+    pub(crate) fn bind_table_with_joins(&mut self, table: TableWithJoins) -> Result<Relation> {
+        if let TableFactor::Derived { lateral: true, .. } = &table.relation && !table.joins.is_empty() {
+            return Err(ErrorCode::InternalError(
+                "Lateral subquery must be the sole factor in table".to_string()
+            ).into());
+        }
         let mut root = self.bind_table_factor(table.relation)?;
         for join in table.joins {
             let (constraint, join_type) = match join.join_operator {
@@ -81,15 +83,8 @@ impl Binder {
                 right = option_rel.unwrap();
             } else {
                 right = self.bind_table_factor(join.relation.clone())?;
-                if let Relation::Subquery(subquery) = &right {
-                    if subquery.query.is_correlated() {
-                        return Err(ErrorCode::BindError(format!(
-                            "Join table \"{}\" has correlated input reference",
-                            join.relation
-                        ))
-                        .into());
-                    }
-                }
+                // Any FROM subquery, not having access to the lateral context, cannot be correlated
+                // at this depth unless it is lateral
                 (cond, _) = self.bind_join_constraint(constraint, None)?;
             }
             let join = BoundJoin {

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Display;
 
@@ -52,7 +53,14 @@ impl Display for Clause {
     }
 }
 
-#[derive(Default, Debug)]
+/// A `BindContext` that is only visible if the `LATERAL` keyword
+/// is provided.
+pub struct LateralBindContext {
+    pub is_visible: bool,
+    pub context: BindContext,
+}
+
+#[derive(Default, Debug, Clone)]
 pub struct BindContext {
     // Columns of all tables.
     pub columns: Vec<ColumnBinding>,
@@ -108,6 +116,36 @@ impl BindContext {
             ))
             .into()),
         }
+    }
+
+    /// Merges two `BindContext`s which are adjacent. For instance, the `BindContext` of two
+    /// adjacent cross-joined tables.
+    pub fn merge_context(&mut self, other: Self) -> Result<()> {
+        let begin = self.columns.len();
+        self.columns.extend(other.columns.into_iter().map(|mut c| {
+            c.index += begin;
+            c
+        }));
+        for (k, v) in other.indexs_of {
+            let entry = self.indexs_of.entry(k).or_insert_with(Vec::new);
+            entry.extend(v.into_iter().map(|x| x + begin));
+        }
+        for (k, (x, y)) in other.range_of {
+            match self.range_of.entry(k) {
+                Entry::Occupied(e) => {
+                    return Err(ErrorCode::InternalError(format!(
+                        "Duplicated table name while binding context {}",
+                        e.key()
+                    ))
+                    .into());
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert((begin + x, begin + y));
+                }
+            }
+        }
+        // we assume that the clause is contained in the outer-level context
+        Ok(())
     }
 }
 

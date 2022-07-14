@@ -94,7 +94,7 @@ impl Binder {
 
         let base_columns = std::mem::take(&mut self.context.columns);
 
-        self.pop_context();
+        self.pop_context()?;
 
         let columns = base_columns
             .into_iter()
@@ -117,7 +117,7 @@ impl Binder {
             ).collect::<Result<Vec<_>>>()?;
 
         let (_, table_name) = Self::resolve_table_name(table_name)?;
-        self.bind_context(columns, table_name, alias)?;
+        self.bind_table_to_context(columns, table_name, alias)?;
 
         let exprs: Vec<_> = args
             .map(|arg| self.bind_function_arg(arg))

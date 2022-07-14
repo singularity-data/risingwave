@@ -35,7 +35,7 @@ impl Binder {
         let query = self.bind_query(query)?;
         let sub_query_id = self.next_subquery_id();
 
-        self.bind_context(
+        self.bind_table_to_context(
             query
                 .body
                 .schema()

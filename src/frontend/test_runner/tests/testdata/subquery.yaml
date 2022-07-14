@@ -87,12 +87,76 @@
 - sql: |
     create table t(x int);
     select * from t, (select * from t as t2 order by t.x desc) as t3;
-  binder_error: 'Bind error: Join table "(SELECT * FROM t AS t2 ORDER BY t.x DESC) AS t3" has correlated input reference'
+  binder_error: 'Item not found: Invalid column: x'
 - sql: |
     create table t(x int);
     select * from t, (select t.x) as t1;
-  binder_error: 'Bind error: Join table "(SELECT t.x) AS t1" has correlated input reference'
+  binder_error: 'Item not found: Invalid column: x'
 - sql: |
     create table t(x int);
     select * from t JOIN (select t.x) as t1;
-  binder_error: 'Bind error: Join table "(SELECT t.x) AS t1" has correlated input reference'
+  binder_error: 'Item not found: Invalid column: x'
+- sql: |
+    /* We should be able to handle nested correlated subquery */
+    create table ab (a int, b int);
+    create table bc (b int, c int);
+    create table t (v1 int, v2 varchar);
+    select * from ab where exists (
+      select * from bc, (
+          select * from t where v1 = a
+      ) as t0
+    );
+  logical_plan: |
+    LogicalProject { exprs: [$1, $2] }
+      LogicalJoin { type: LeftSemi, on: true, output_indices: all }
+        LogicalScan { table: ab, columns: [_row_id, a, b] }
+        LogicalProject { exprs: [$1, $2, $3, $4] }
+          LogicalJoin { type: Inner, on: true, output_indices: all }
+            LogicalScan { table: bc, columns: [_row_id, b, c] }
+            LogicalProject { exprs: [$1, $2] }
+              LogicalFilter { predicate: ($1 = CorrelatedInputRef { index: 1, depth: 2 }) }
+                LogicalScan { table: t, columns: [_row_id, v1, v2] }
+- sql: |
+    /* We cannot reference columns in left table if not lateral */
+    create table ab (a int, b int);
+    create table bc (b int, c int);
+    create table t (v1 int, v2 varchar);
+    select * from ab where exists (
+      select * from bc, (
+          select * from t where v1 = c
+      ) as t0
+    );
+  binder_error: 'Item not found: Invalid column: c'
+- sql: |
+    /* Reference to left table should be permitted with lateral */
+    create table ab (a int, b int);
+    create table bc (b int, c int);
+    create table t (v1 int, v2 int);
+    select * from ab where exists (
+      select * from bc, lateral (
+          select * from t where v1 = a and v2 = c
+      ) as t0
+    );
+  binder_error: 'Feature is not yet implemented: lateral subqueries are not yet supported, No tracking issue'
+- sql: |
+    /* We need to ensure doubly nested reference to a left table is not permitted */
+    create table ab (a int, b int);
+    create table bc (b int, c int);
+    create table t (v1 int, v2 int);
+    select * from ab, (
+      select * from bc, (
+          select * from t where v1 = a
+      ) as t0
+    );
+  binder_error: 'Item not found: Invalid column: a'
+- sql: |
+    /* Doubly nested reference to a left table with lateral is permitted */
+    create table ab (a int, b int);
+    create table bc (b int, c int);
+    create table t (v1 int, v2 int);
+    select * from ab, lateral (
+      select * from bc, (
+          select * from t where v1 = a
+      ) as t0
+    );
+  binder_error: 'Feature is not yet implemented: lateral subqueries are not yet supported, No tracking issue'

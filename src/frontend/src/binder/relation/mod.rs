@@ -114,7 +114,7 @@ impl Binder {
     }
 
     /// Fill the [`BindContext`](super::BindContext) for table.
-    pub(super) fn bind_context(
+    pub(super) fn bind_table_to_context(
         &mut self,
         columns: impl IntoIterator<Item = (bool, Field)>, // bool indicates if the field is hidden
         table_name: String,
@@ -184,7 +184,7 @@ impl Binder {
             && let Some(bound_query) = self.cte_to_relation.get(&table_name)
         {
             let (query, alias) = bound_query.clone();
-            self.bind_context(
+            self.bind_table_to_context(
                 query
                     .body
                     .schema()
@@ -233,12 +233,31 @@ impl Binder {
                 alias,
             } => {
                 if lateral {
-                    Err(ErrorCode::NotImplemented("unsupported lateral".into(), None.into()).into())
+                    // If we detect a lateral, we mark the lateral context as visible.
+                    self.try_mark_lateral_as_visible();
+
+                    // Bind lateral subquery here.
+
+                    // Mark the lateral context as invisible once again.
+                    self.try_mark_lateral_as_invisible();
+                    Err(ErrorCode::NotImplemented(
+                        "lateral subqueries are not yet supported".into(),
+                        None.into(),
+                    )
+                    .into())
                 } else {
-                    Ok(Relation::Subquery(Box::new(
-                        self.bind_subquery_relation(*subquery, alias)?,
-                    )))
+                    // Non-lateral subqueries to not have access to the lateral context.
+                    self.push_lateral_context();
+                    let bound_subquery = self.bind_subquery_relation(*subquery, alias)?;
+                    self.pop_and_merge_lateral_context()?;
+                    Ok(Relation::Subquery(Box::new(bound_subquery)))
                 }
+            }
+            TableFactor::NestedJoin(table_with_joins) => {
+                self.push_lateral_context();
+                let bound_join = self.bind_table_with_joins(*table_with_joins)?;
+                self.pop_and_merge_lateral_context()?;
+                Ok(bound_join)
             }
             _ => Err(ErrorCode::NotImplemented(
                 format!("unsupported table factor {:?}", table_factor),

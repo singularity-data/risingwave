@@ -69,7 +69,7 @@ impl Binder {
     pub fn bind_query(&mut self, query: Query) -> Result<BoundQuery> {
         self.push_context();
         let result = self.bind_query_inner(query);
-        self.pop_context();
+        self.pop_context()?;
         result
     }
 
