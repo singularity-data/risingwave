@@ -77,6 +77,9 @@ pub struct TestCase {
     /// Error of binder
     pub binder_error: Option<String>,
 
+    // Error of catalog
+    pub catalog_error: Option<String>,
+
     /// Error of planner
     pub planner_error: Option<String>,
 
@@ -128,6 +131,9 @@ pub struct TestCaseResult {
     /// Error of binder
     pub binder_error: Option<String>,
 
+    // Error of catalog
+    pub catalog_error: Option<String>,
+
     /// Error of planner
     pub planner_error: Option<String>,
 
@@ -140,6 +146,9 @@ impl TestCaseResult {
     pub fn as_test_case(self, original_test_case: &TestCase) -> Result<TestCase> {
         if original_test_case.binder_error.is_none() && let Some(ref err) = self.binder_error {
             return Err(anyhow!("unexpected binder error: {}", err));
+        }
+        if original_test_case.catalog_error.is_none() && let Some(ref err) = self.catalog_error {
+            return Err(anyhow!("unexpected catalog error: {}", err));
         }
         if original_test_case.planner_error.is_none() && let Some(ref err) = self.planner_error {
             return Err(anyhow!("unexpected planner error: {}", err));
@@ -162,6 +171,7 @@ impl TestCaseResult {
             batch_plan_proto: self.batch_plan_proto,
             planner_error: self.planner_error,
             optimizer_error: self.optimizer_error,
+            catalog_error: self.catalog_error,
             binder_error: self.binder_error,
             create_source: original_test_case.create_source.clone(),
             with_config_map: original_test_case.with_config_map.clone(),
@@ -269,13 +279,36 @@ impl TestCase {
                     with_options,
                     ..
                 } => {
-                    create_table::handle_create_table(context, name, columns, with_options).await?;
+                    if let Err(err) =
+                        create_table::handle_create_table(context, name, columns, with_options)
+                            .await
+                    {
+                        let ret = TestCaseResult {
+                            catalog_error: Some(err.to_string()),
+                            ..Default::default()
+                        };
+                        if do_check_result {
+                            check_result(self, &ret)?;
+                        }
+                        result = Some(ret);
+                    };
                 }
                 Statement::CreateSource {
                     is_materialized,
                     stmt,
                 } => {
-                    create_source::handle_create_source(context, is_materialized, stmt).await?;
+                    if let Err(err) =
+                        create_source::handle_create_source(context, is_materialized, stmt).await
+                    {
+                        let ret = TestCaseResult {
+                            catalog_error: Some(err.to_string()),
+                            ..Default::default()
+                        };
+                        if do_check_result {
+                            check_result(self, &ret)?;
+                        }
+                        result = Some(ret);
+                    };
                 }
                 Statement::CreateIndex {
                     name,
@@ -294,11 +327,37 @@ impl TestCase {
                     with_options,
                     ..
                 } => {
-                    create_mv::handle_create_mv(context, name, query, WithProperties(with_options))
-                        .await?;
+                    if let Err(err) = create_mv::handle_create_mv(
+                        context,
+                        name,
+                        query,
+                        WithProperties(with_options),
+                    )
+                    .await
+                    {
+                        let ret = TestCaseResult {
+                            catalog_error: Some(err.to_string()),
+                            ..Default::default()
+                        };
+                        if do_check_result {
+                            check_result(self, &ret)?;
+                        }
+                        result = Some(ret);
+                    };
                 }
                 Statement::Drop(drop_statement) => {
-                    drop_table::handle_drop_table(context, drop_statement.object_name).await?;
+                    if let Err(err) =
+                        drop_table::handle_drop_table(context, drop_statement.object_name).await
+                    {
+                        let ret = TestCaseResult {
+                            catalog_error: Some(err.to_string()),
+                            ..Default::default()
+                        };
+                        if do_check_result {
+                            check_result(self, &ret)?;
+                        }
+                        result = Some(ret);
+                    };
                 }
                 _ => return Err(anyhow!("Unsupported statement type")),
             }
@@ -413,6 +472,7 @@ fn explain_plan(plan: &PlanRef) -> String {
 
 fn check_result(expected: &TestCase, actual: &TestCaseResult) -> Result<()> {
     check_err("binder", &expected.binder_error, &actual.binder_error)?;
+    check_err("catalog", &expected.catalog_error, &actual.catalog_error)?;
     check_err("planner", &expected.planner_error, &actual.planner_error)?;
     check_err(
         "optimizer",

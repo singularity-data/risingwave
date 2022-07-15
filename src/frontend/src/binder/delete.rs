@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use risingwave_common::error::{ErrorCode, Result};
+use risingwave_common::error::{ErrorCode, Result, RwError};
 use risingwave_sqlparser::ast::{Expr, ObjectName};
 
 use super::{Binder, BoundBaseTable, BoundTableSource};
@@ -36,7 +36,15 @@ impl Binder {
         selection: Option<Expr>,
     ) -> Result<BoundDelete> {
         let (schema_name, table_name) = Self::resolve_table_name(source_name.clone())?;
-        let table_source = self.bind_table_source(source_name)?;
+        let table_source = self.bind_table_source(source_name).map_err(|err| {
+            if let Ok(table) = self.catalog.get_table_by_name(&self.db_name, &schema_name,
+            &table_name)      && table.associated_source_id().is_none(){
+                return RwError::from(ErrorCode::InvalidInputSyntax(
+                    format!("cannot change materialized view {}",table_name)
+                ));
+            }
+            err
+        })?;
         if table_source.append_only {
             return Err(ErrorCode::BindError(
                 "Append-only table source doesn't support delete".to_string(),

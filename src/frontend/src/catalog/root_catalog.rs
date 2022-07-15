@@ -247,7 +247,19 @@ impl Catalog {
                     Err(CatalogError::Duplicated("table", relation_name.to_string()).into())
                 }
                 risingwave_pb::stream_plan::source_node::SourceType::Source => {
-                    Err(CatalogError::Duplicated("source", relation_name.to_string()).into())
+                    let table = self
+                        .get_table_by_name(db_name, schema_name, relation_name)
+                        .ok();
+                    match table {
+                        Some(_) => Err(CatalogError::Duplicated(
+                            "materialized source",
+                            relation_name.to_string(),
+                        )
+                        .into()),
+                        None => Err(
+                            CatalogError::Duplicated("source", relation_name.to_string()).into(),
+                        ),
+                    }
                 }
             }
         } else if let Some(_table) = schema.get_table_by_name(relation_name) {

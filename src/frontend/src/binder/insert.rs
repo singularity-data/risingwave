@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use itertools::Itertools;
-use risingwave_common::error::{ErrorCode, Result};
+use risingwave_common::error::{ErrorCode, Result, RwError};
 use risingwave_common::types::DataType;
 use risingwave_sqlparser::ast::{Ident, ObjectName, Query, SetExpr};
 
@@ -40,8 +40,17 @@ impl Binder {
         _columns: Vec<Ident>,
         source: Query,
     ) -> Result<BoundInsert> {
-        let table_source = self.bind_table_source(source_name)?;
+        let (schema_name, table_name) = Self::resolve_table_name(source_name.clone())?;
 
+        let table_source = self.bind_table_source(source_name).map_err(|err| {
+            if let Ok(table) = self.catalog.get_table_by_name(&self.db_name, &schema_name,
+                    &table_name)          && table.associated_source_id().is_none(){
+                                return RwError::from(ErrorCode::InvalidInputSyntax(
+                                    format!("cannot change materialized view {}",table_name)
+                                ));
+                            }
+            err
+        })?;
         let expected_types = table_source
             .columns
             .iter()

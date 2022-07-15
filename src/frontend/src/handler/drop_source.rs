@@ -25,11 +25,21 @@ pub async fn handle_drop_source(context: OptimizerContext, name: ObjectName) -> 
     let (schema_name, source_name) = Binder::resolve_table_name(name)?;
 
     let catalog_reader = session.env().catalog_reader();
+
     let source = catalog_reader
         .read_guard()
-        .get_source_by_name(session.database(), &schema_name, &source_name)?
+        .get_source_by_name(session.database(), &schema_name, &source_name)
+        .map_err(|err| {
+            if let Ok(table) =
+            catalog_reader.read_guard().get_table_by_name(session.database(), &schema_name, &source_name)
+            && table.associated_source_id().is_none(){
+                return RwError::from(ErrorCode::InvalidInputSyntax(
+                    "Use `DROP MATERIALIZED VIEW` to drop a materialized view.".to_owned(),
+                ));
+            }
+            err
+        })?
         .clone();
-
     match source.source_type {
         SourceType::Table => {
             return Err(RwError::from(ErrorCode::InvalidInputSyntax(
@@ -97,21 +107,5 @@ mod tests {
     #[tokio::test]
     async fn test_drop_materialized_source() {
         test_drop_source(true).await;
-    }
-
-    #[tokio::test]
-    async fn test_drop_table_using_drop_source() {
-        let frontend = LocalFrontend::new(Default::default()).await;
-
-        frontend.run_sql("CREATE TABLE s").await.unwrap();
-
-        assert_eq!(
-            "Invalid input syntax: Use `DROP TABLE` to drop a table.".to_string(),
-            frontend
-                .run_sql("DROP SOURCE s")
-                .await
-                .unwrap_err()
-                .to_string()
-        );
     }
 }

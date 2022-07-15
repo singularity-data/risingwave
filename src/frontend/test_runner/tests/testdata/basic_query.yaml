@@ -127,3 +127,35 @@
     select * from unnest(Array[1,2,3]);
   batch_plan: |
     BatchTableFunction { [1:Int32, 2:Int32, 3:Int32] }
+- sql: |
+    create table t;
+    create materialized view mv as select * from t;
+    insert into mv values (233);
+  binder_error: 'Invalid input syntax: cannot change materialized view mv'
+- sql: |
+    create table t;
+    create materialized view mv as select * from t;
+    update mv set t = 666;
+  binder_error: 'Invalid input syntax: cannot change materialized view mv'
+- sql: |
+    create table t;
+    create materialized view mv as select * from t;
+    delete from mv;
+  binder_error: 'Invalid input syntax: cannot change materialized view mv'
+- sql: |
+    create table t;
+    create source t with ( 'connector' = 'datagen' ) row format json;
+  catalog_error: 'Catalog error: table with name t exists'
+- sql: |
+    create source t with ( 'connector' = 'datagen' ) row format json;
+    create table t;
+  catalog_error: 'Catalog error: source with name t exists'
+- sql: |
+    create materialized source t (v1 int) with ( 'connector' = 'datagen' )  row format json;
+    create source t with ( 'connector' = 'datagen' ) row format json;
+  catalog_error: 'Catalog error: materialized source with name t exists'
+- sql: |
+    create table s;
+    create materialized view mv as select * from s;
+    drop source mv;
+  catalog_error: 'Invalid input syntax: Use `DROP MATERIALIZED VIEW` to drop a materialized view.'

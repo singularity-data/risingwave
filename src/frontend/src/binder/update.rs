@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 use risingwave_common::ensure;
-use risingwave_common::error::{ErrorCode, Result};
+use risingwave_common::error::{ErrorCode, Result, RwError};
 use risingwave_sqlparser::ast::{Assignment, Expr, TableFactor, TableWithJoins};
 
 use super::{Binder, BoundTableSource, Relation};
@@ -52,7 +52,16 @@ impl Binder {
                 TableFactor::Table { name, .. } => name.clone(),
                 _ => unreachable!(),
             };
-            self.bind_table_source(name)?
+            let (schema_name, table_name) = Self::resolve_table_name(name.clone())?;
+            self.bind_table_source(name).map_err(|err| {
+                if let Ok(table) = self.catalog.get_table_by_name(&self.db_name, &schema_name,
+                &table_name)      && table.associated_source_id().is_none(){
+                    return RwError::from(ErrorCode::InvalidInputSyntax(
+                        format!("cannot change materialized view {}",table_name)
+                    ));
+                }
+                err
+            })?
         };
 
         if table_source.append_only {
