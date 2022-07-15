@@ -400,7 +400,14 @@ impl LocalStreamManagerCore {
     ) -> Result<impl StreamConsumer> {
         let dispatcher_impls = dispatchers
             .iter()
-            .map(|dispatcher| DispatcherImpl::new(&self.context, actor_id, dispatcher))
+            .map(|dispatcher| {
+                DispatcherImpl::new(
+                    &self.context,
+                    actor_id,
+                    dispatcher,
+                    self.streaming_metrics.clone(),
+                )
+            })
             .try_collect()?;
 
         Ok(DispatchExecutor::new(
