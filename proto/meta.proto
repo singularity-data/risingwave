@@ -208,9 +208,22 @@ message GetClusterInfoResponse {
   repeated TableFragments table_fragments = 1;
 }
 
+message MigrateActorRequest {
+  message TableActorMigrateInfo {
+    map<uint32, uint32> table_actors = 1;
+  }
+
+  map<uint32, TableActorMigrateInfo> actors = 1;
+}
+
+message MigrateActorResponse {
+  map<uint32, uint32> actor_mapping = 1;
+}
+
 service ScaleService {
   // TODO(Kexiang): delete them when config change interface is finished
   rpc Pause(PauseRequest) returns (PauseResponse);
   rpc Resume(ResumeRequest) returns (ResumeResponse);
   rpc GetClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
+  rpc MigrateActor(MigrateActorRequest) returns (MigrateActorResponse);
 }

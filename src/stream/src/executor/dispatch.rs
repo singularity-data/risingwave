@@ -103,7 +103,7 @@ impl DispatchExecutorInner {
     /// Add new dispatchers to the executor. Will check whether their ids are unique.
     fn add_dispatchers<'a>(
         &mut self,
-        new_dispatchers: impl IntoIterator<Item = &'a ProstDispatcher>,
+        new_dispatchers: impl IntoIterator<Item=&'a ProstDispatcher>,
     ) -> Result<()> {
         let new_dispatchers: Vec<_> = new_dispatchers
             .into_iter()
@@ -141,6 +141,7 @@ impl DispatchExecutorInner {
             .try_collect()?;
 
         let dispatcher = self.find_dispatcher(update.dispatcher_id);
+
         dispatcher.add_outputs(outputs);
 
         Ok(())
@@ -175,7 +176,7 @@ impl DispatchExecutorInner {
     #[expect(clippy::unused_async)]
     async fn pre_mutate_dispatchers(&mut self, mutation: &Option<Arc<Mutation>>) -> Result<()> {
         let Some(mutation) = mutation.as_deref() else {
-            return Ok(())
+            return Ok(());
         };
 
         match mutation {
@@ -199,7 +200,7 @@ impl DispatchExecutorInner {
     #[expect(clippy::unused_async)]
     async fn post_mutate_dispatchers(&mut self, mutation: &Option<Arc<Mutation>>) -> Result<()> {
         let Some(mutation) = mutation.as_deref() else {
-            return Ok(())
+            return Ok(());
         };
 
         match mutation {
@@ -250,7 +251,7 @@ impl DispatchExecutor {
 }
 
 impl StreamConsumer for DispatchExecutor {
-    type BarrierStream = impl Stream<Item = Result<Barrier>> + Send;
+    type BarrierStream = impl Stream<Item=Result<Barrier>> + Send;
 
     fn execute(mut self: Box<Self>) -> Self::BarrierStream {
         #[try_stream]
@@ -393,7 +394,7 @@ macro_rules! define_dispatcher_associated_types {
     };
 }
 
-pub trait DispatchFuture<'a> = Future<Output = Result<()>> + Send;
+pub trait DispatchFuture<'a> = Future<Output=Result<()>> + Send;
 
 pub trait Dispatcher: Debug + 'static {
     type DataFuture<'a>: DispatchFuture<'a>;
@@ -402,7 +403,7 @@ pub trait Dispatcher: Debug + 'static {
     fn dispatch_data(&mut self, chunk: StreamChunk) -> Self::DataFuture<'_>;
     fn dispatch_barrier(&mut self, barrier: Barrier) -> Self::BarrierFuture<'_>;
 
-    fn add_outputs(&mut self, outputs: impl IntoIterator<Item = BoxedOutput>);
+    fn add_outputs(&mut self, outputs: impl IntoIterator<Item=BoxedOutput>);
     fn remove_outputs(&mut self, actor_ids: &HashSet<ActorId>);
 
     fn dispatcher_id(&self) -> DispatcherId;
@@ -448,7 +449,7 @@ impl Dispatcher for RoundRobinDataDispatcher {
         }
     }
 
-    fn add_outputs(&mut self, outputs: impl IntoIterator<Item = BoxedOutput>) {
+    fn add_outputs(&mut self, outputs: impl IntoIterator<Item=BoxedOutput>) {
         self.outputs.extend(outputs.into_iter());
     }
 
@@ -506,7 +507,7 @@ impl HashDataDispatcher {
 impl Dispatcher for HashDataDispatcher {
     define_dispatcher_associated_types!();
 
-    fn add_outputs(&mut self, outputs: impl IntoIterator<Item = BoxedOutput>) {
+    fn add_outputs(&mut self, outputs: impl IntoIterator<Item=BoxedOutput>) {
         self.outputs.extend(outputs.into_iter());
     }
 
@@ -653,7 +654,7 @@ pub struct BroadcastDispatcher {
 
 impl BroadcastDispatcher {
     pub fn new(
-        outputs: impl IntoIterator<Item = BoxedOutput>,
+        outputs: impl IntoIterator<Item=BoxedOutput>,
         dispatcher_id: DispatcherId,
     ) -> Self {
         Self {
@@ -663,8 +664,8 @@ impl BroadcastDispatcher {
     }
 
     fn into_pairs(
-        outputs: impl IntoIterator<Item = BoxedOutput>,
-    ) -> impl Iterator<Item = (ActorId, BoxedOutput)> {
+        outputs: impl IntoIterator<Item=BoxedOutput>,
+    ) -> impl Iterator<Item=(ActorId, BoxedOutput)> {
         outputs
             .into_iter()
             .map(|output| (output.actor_id(), output))
@@ -692,7 +693,7 @@ impl Dispatcher for BroadcastDispatcher {
         }
     }
 
-    fn add_outputs(&mut self, outputs: impl IntoIterator<Item = BoxedOutput>) {
+    fn add_outputs(&mut self, outputs: impl IntoIterator<Item=BoxedOutput>) {
         self.outputs.extend(Self::into_pairs(outputs));
     }
 
@@ -737,7 +738,7 @@ impl SimpleDispatcher {
 impl Dispatcher for SimpleDispatcher {
     define_dispatcher_associated_types!();
 
-    fn add_outputs(&mut self, _outputs: impl IntoIterator<Item = BoxedOutput>) {
+    fn add_outputs(&mut self, _outputs: impl IntoIterator<Item=BoxedOutput>) {
         panic!("simple dispatcher does not support add_outputs");
     }
 
@@ -894,6 +895,42 @@ mod tests {
         );
     }
 
+    fn add_local_channels(ctx: Arc<SharedContext>, up_down_ids: Vec<(u32, u32)>) {
+        for up_down_id in up_down_ids {
+            println!("add local up {} to down {}", up_down_id.0, up_down_id.1);
+            let (tx, rx) = channel(LOCAL_OUTPUT_CHANNEL_SIZE);
+            ctx.add_channel_pairs(up_down_id, (Some(tx), Some(rx)));
+        }
+    }
+
+    fn add_remote_channels(ctx: Arc<SharedContext>, up_id: u32, down_ids: Vec<u32>) {
+        for down_id in down_ids {
+            println!("add remote up {} to down {}", up_id, down_id);
+            let (tx, rx) = channel(LOCAL_OUTPUT_CHANNEL_SIZE);
+            ctx.add_channel_pairs((up_id, down_id), (Some(tx), Some(rx)));
+        }
+    }
+
+    fn helper_make_local_actor(actor_id: u32) -> ActorInfo {
+        ActorInfo {
+            actor_id,
+            host: Some(HostAddress {
+                host: LOCAL_TEST_ADDR.host.clone(),
+                port: LOCAL_TEST_ADDR.port as i32,
+            }),
+        }
+    }
+
+    fn helper_make_remote_actor(actor_id: u32) -> ActorInfo {
+        ActorInfo {
+            actor_id,
+            host: Some(HostAddress {
+                host: "172.1.1.2".to_string(),
+                port: 2334,
+            }),
+        }
+    }
+
     #[tokio::test]
     async fn test_configuration_change() {
         let schema = Schema { fields: vec![] };
@@ -935,7 +972,7 @@ mod tests {
                 ..Default::default()
             },
         )
-        .unwrap();
+            .unwrap();
 
         let executor = Box::new(DispatchExecutor::new(
             input,
@@ -944,7 +981,7 @@ mod tests {
             ctx.clone(),
             metrics,
         ))
-        .execute();
+            .execute();
         pin_mut!(executor);
 
         // 2. Take downstream receivers.
