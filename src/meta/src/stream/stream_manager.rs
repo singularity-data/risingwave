@@ -12,31 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
-
+use std::time::Duration;
+use async_recursion::async_recursion;
 use itertools::Itertools;
 use risingwave_common::bail;
 use risingwave_common::catalog::TableId;
 use risingwave_common::error::Result;
 use risingwave_common::types::{ParallelUnitId, VIRTUAL_NODE_COUNT};
 use risingwave_pb::catalog::{Source, Table};
-use risingwave_pb::common::{ActorInfo, ParallelUnitMapping, WorkerType};
 use risingwave_pb::meta::table_fragments::fragment::FragmentDistributionType;
+use risingwave_pb::common::{ActorInfo, ParallelUnitMapping, WorkerNode, WorkerType};
 use risingwave_pb::meta::table_fragments::{ActorState, ActorStatus};
 use risingwave_pb::stream_plan::stream_node::NodeBody;
-use risingwave_pb::stream_plan::{ActorMapping, Dispatcher, DispatcherType, StreamNode};
+use risingwave_pb::stream_plan::{ActorMapping, AddMutation, Dispatcher, DispatcherType, StreamActor, StreamNode, UpdateMutation};
 use risingwave_pb::stream_service::{
     BroadcastActorInfoTableRequest, BuildActorsRequest, HangingChannel, UpdateActorsRequest,
 };
 use risingwave_rpc_client::StreamClientPoolRef;
 use uuid::Uuid;
+use risingwave_pb::stream_plan::barrier::Mutation;
+use risingwave_pb::stream_plan::update_mutation::DispatcherUpdate;
 
 use super::ScheduledLocations;
 use crate::barrier::{BarrierManagerRef, Command};
 use crate::cluster::{ClusterManagerRef, WorkerId};
 use crate::hummock::compaction_group::manager::CompactionGroupManagerRef;
-use crate::manager::{DatabaseId, HashMappingManagerRef, MetaSrvEnv, SchemaId};
+use crate::manager::{DatabaseId, HashMappingManagerRef, IdCategory, IdGeneratorManagerRef, MetaSrvEnv, SchemaId};
 use crate::model::{ActorId, TableFragments};
 use crate::storage::MetaStore;
 use crate::stream::{fetch_source_fragments, FragmentManagerRef, Scheduler, SourceManagerRef};
@@ -92,12 +95,15 @@ pub struct GlobalStreamManager<S: MetaStore> {
     /// Client Pool to stream service on compute nodes
     client_pool: StreamClientPoolRef,
 
+    /// id generator manager.
+    id_gen_manager: IdGeneratorManagerRef<S>,
+
     compaction_group_manager: CompactionGroupManagerRef<S>,
 }
 
 impl<S> GlobalStreamManager<S>
-where
-    S: MetaStore,
+    where
+        S: MetaStore,
 {
     pub fn new(
         env: MetaSrvEnv<S>,
@@ -116,6 +122,7 @@ where
             _hash_mapping_manager: env.hash_mapping_manager_ref(),
             client_pool: env.stream_client_pool_ref(),
             compaction_group_manager,
+            id_gen_manager: env.id_gen_manager_ref(),
         })
     }
 
@@ -290,6 +297,338 @@ where
         Ok(())
     }
 
+    #[async_recursion]
+    async fn resolve_migrate_dependent_actors(&self,
+                                              table_ids: HashSet<TableId>,
+                                              actor_map: &mut HashMap<ActorId, StreamActor>,
+                                              actor_id_to_worker_id: &mut HashMap<ActorId, WorkerId>,
+                                              actors: &mut HashMap<TableId, HashMap<ActorId, WorkerId>>,
+                                              chain_actor_ids: &mut HashSet<ActorId>,
+                                              cache: &mut HashSet<TableId>) -> Result<()> {
+        for table_id in table_ids {
+            if cache.contains(&table_id) {
+                continue;
+            }
+
+            let table_fragments = self.fragment_manager.select_table_fragments_by_table_id(&table_id).await?;
+            actor_id_to_worker_id.extend(table_fragments.actor_to_node());
+
+            let table_actor_map = table_fragments.actor_map();
+
+            for (actor_id, actor) in table_actor_map {
+                actor_map.insert(actor_id, actor.clone());
+            }
+
+            let table_chain_actor_ids = table_fragments.chain_actor_ids();
+            if !table_chain_actor_ids.is_empty() {
+                chain_actor_ids.extend(table_chain_actor_ids);
+                let dependent_table_ids = table_fragments.dependent_table_ids();
+                self.resolve_migrate_dependent_actors(dependent_table_ids, actor_map, actor_id_to_worker_id, actors, chain_actor_ids, cache).await?;
+            }
+
+            cache.insert(table_id);
+        }
+
+        Ok(())
+    }
+
+    pub async fn migrate_actors(
+        &self,
+        actors: HashMap<TableId, HashMap<ActorId, WorkerId>>,
+    ) -> Result<HashMap<ActorId, ActorId>> {
+        let worker_nodes: HashMap<WorkerId, WorkerNode> = self
+            .cluster_manager
+            .list_worker_node(
+                WorkerType::ComputeNode,
+                Some(risingwave_pb::common::worker_node::State::Running),
+            )
+            .await
+            .into_iter()
+            .map(|worker_node| (worker_node.id, worker_node))
+            .collect();
+
+        if worker_nodes.is_empty() {
+            bail!("no available compute node in the cluster");
+        }
+
+        let mut actors = actors;
+
+        let mut chain_actor_ids = HashSet::new();
+        let mut actor_id_to_worker_id = HashMap::new();
+        let mut actor_map = HashMap::new();
+        let mut _cache = HashSet::new();
+        self.resolve_migrate_dependent_actors(actors.keys().cloned().collect(), &mut actor_map, &mut actor_id_to_worker_id, &mut actors, &mut chain_actor_ids, &mut _cache).await?;
+
+        let mut actor_id_to_target_id = HashMap::new();
+        let mut actor_id_to_table_id = HashMap::new();
+        for (table_id, map) in &actors {
+            for actor_id in map.keys() {
+                if !actor_map.contains_key(actor_id) {
+                    bail!("actor {} not found", actor_id);
+                }
+
+                actor_id_to_table_id.insert(*actor_id, *table_id);
+            }
+
+            for (&actor_id, &worker_id) in map {
+                if !worker_nodes.contains_key(&worker_id) {
+                    //bail!("worker {} not found", worker_id);
+                }
+
+                actor_id_to_target_id.insert(actor_id, worker_id);
+            }
+        }
+
+        let mut downstream_actors = HashMap::new();
+        let mut upstream_actors = HashMap::new();
+        for (actor_id, stream_actor) in &actor_map {
+            for dispatcher in &stream_actor.dispatcher {
+                for downstream_actor_id in &dispatcher.downstream_actor_id {
+                    downstream_actors
+                        .entry(*actor_id as ActorId)
+                        .or_insert(vec![])
+                        .push(*downstream_actor_id as ActorId);
+                    upstream_actors
+                        .entry(*downstream_actor_id as ActorId)
+                        .or_insert(vec![])
+                        .push((*actor_id, dispatcher.dispatcher_id));
+                }
+            }
+        }
+
+        let actor_ids: BTreeSet<ActorId> = actors.values().flat_map(|value| value.keys().into_iter().cloned()).collect();
+
+        let mut old_actor_id_to_new_actor_id = HashMap::new();
+        let mut new_actor_id_to_old_actor_id = HashMap::new();
+        let mut new_actor_map = HashMap::new();
+
+        for actor_id in &actor_ids {
+            let id = self.id_gen_manager.generate::<{ IdCategory::Actor }>().await? as ActorId;
+            old_actor_id_to_new_actor_id.insert(*actor_id, id);
+            new_actor_id_to_old_actor_id.insert(id, *actor_id);
+
+            let old_actor = actor_map.get(actor_id).unwrap();
+            let mut new_actor = old_actor.clone();
+
+            if chain_actor_ids.contains(actor_id) {
+                let upstream_actor_ids = upstream_actors.get(actor_id).unwrap();
+                assert_eq!(upstream_actor_ids.len(), 1);
+                let (upstream_actor_id, _) = upstream_actor_ids.iter().next().unwrap();
+                if actor_ids.contains(upstream_actor_id) {
+                    new_actor.same_worker_node_as_upstream = false;
+                }
+            }
+
+            for upstream_actor_id in &mut new_actor.upstream_actor_id {
+                if let Some(new_actor_id) = old_actor_id_to_new_actor_id.get(upstream_actor_id) {
+                    *upstream_actor_id = *new_actor_id as u32;
+                }
+            }
+
+            for dispatcher in &mut new_actor.dispatcher {
+                for downstream_actor_id in &mut dispatcher.downstream_actor_id {
+                    if let Some(new_actor_id) = old_actor_id_to_new_actor_id.get(downstream_actor_id) {
+                        *downstream_actor_id = *new_actor_id as u32;
+                    }
+                }
+            }
+
+            new_actor.actor_id = id;
+
+            new_actor_map.insert(*actor_id as ActorId, new_actor);
+        }
+
+        let mut node_hanging_channels: HashMap<WorkerId, Vec<HangingChannel>> = HashMap::new();
+
+        for actor_id in &actor_ids {
+            if let Some(upstream_actor_ids) = upstream_actors.get(actor_id) {
+                let worker_id = actor_id_to_target_id.get(actor_id).unwrap();
+                let worker = worker_nodes.get(worker_id).unwrap();
+
+                for (upstream_actor_id, _upstream_dispatcher_id) in upstream_actor_ids {
+                    if actor_ids.contains(upstream_actor_id) {
+                        continue;
+                    }
+
+                    let new_actor_id = old_actor_id_to_new_actor_id.get(actor_id).unwrap();
+
+                    // note: must exists
+                    let upstream_worker_id = actor_id_to_worker_id.get(upstream_actor_id).unwrap();
+
+                    // note: we will create local channel later
+                    if worker_id == upstream_worker_id {
+                        continue;
+                    }
+
+                    node_hanging_channels.entry(*upstream_worker_id).or_default()
+                        .push(HangingChannel {
+                            upstream: Some(ActorInfo {
+                                actor_id: *upstream_actor_id,
+                                host: None,
+                            }),
+                            downstream: Some(ActorInfo {
+                                actor_id: *new_actor_id,
+                                host: worker.host.clone(),
+                            }),
+                        })
+                }
+            }
+        }
+
+        let mut actor_infos_to_broadcast = vec![];
+        let mut node_actors: HashMap<WorkerId, Vec<_>> = HashMap::new();
+        for (actor_id, &worker_id) in &actor_id_to_target_id {
+            let new_actor = new_actor_map.get(actor_id).unwrap();
+            node_actors.entry(worker_id).or_default().push(new_actor.clone());
+
+            let worker = worker_nodes.get(&worker_id).unwrap();
+            actor_infos_to_broadcast.push(ActorInfo {
+                actor_id: new_actor.actor_id,
+                host: worker.host.clone(),
+            })
+        }
+
+
+        let mut broadcast_node_ids = HashSet::new();
+        for actor_id in &actor_ids {
+            if let Some(upstream_actor_ids) = upstream_actors.get(actor_id) {
+                for (upstream_actor_id, _) in upstream_actor_ids {
+                    let node_id = actor_id_to_worker_id.get(upstream_actor_id).unwrap();
+                    broadcast_node_ids.insert(node_id);
+                }
+            }
+        }
+
+        for node_id in broadcast_node_ids {
+            let node = worker_nodes.get(node_id).unwrap();
+            let client = self.client_pool.get(node).await?;
+
+            client
+                .to_owned()
+                .broadcast_actor_info_table(BroadcastActorInfoTableRequest {
+                    info: actor_infos_to_broadcast.clone(),
+                })
+                .await?;
+        }
+
+        for (node_id, stream_actors) in &node_actors {
+            let node = worker_nodes.get(node_id).unwrap();
+            let client = self.client_pool.get(node).await?;
+
+            let request_id = Uuid::new_v4().to_string();
+            tracing::debug!(request_id = request_id.as_str(), actors = ?actors, "update actors");
+            let request = UpdateActorsRequest {
+                request_id,
+                actors: stream_actors.clone(),
+                hanging_channels: node_hanging_channels.remove(node_id).unwrap_or_default(),
+            };
+
+            client
+                .to_owned()
+                .update_actors(request)
+                .await?;
+        }
+
+
+        // Build remaining hanging channels on compute nodes.
+        for (node_id, hanging_channels) in node_hanging_channels {
+            let node = worker_nodes.get(&node_id).unwrap();
+
+            let client = self.client_pool.get(node).await?;
+            let request_id = Uuid::new_v4().to_string();
+
+            client
+                .to_owned()
+                .update_actors(UpdateActorsRequest {
+                    request_id,
+                    actors: vec![],
+                    hanging_channels,
+                })
+                .await?;
+        }
+
+        // In the second stage, each [`WorkerNode`] builds local actors and connect them with
+        // channels.
+        for (node_id, stream_actors) in node_actors {
+            let node = worker_nodes.get(&node_id).unwrap();
+
+            let client = self.client_pool.get(node).await?;
+
+            let request_id = Uuid::new_v4().to_string();
+            tracing::debug!(request_id = request_id.as_str(), actors = ?actors, "build actors");
+            client
+                .to_owned()
+                .build_actors(BuildActorsRequest {
+                    request_id,
+                    actor_id: stream_actors
+                        .iter()
+                        .map(|stream_actor| stream_actor.actor_id)
+                        .collect(),
+                })
+                .await?;
+        }
+
+        self.barrier_manager.run_command(Command::Plain(Some(Mutation::Add(AddMutation {
+            actor_dispatchers: Default::default(),
+            actor_splits: Default::default(),
+        })))).await.unwrap();
+
+        let mut actor_dispatcher_update = HashMap::new();
+        for actor_id in &actor_ids {
+            if let Some(upstream_actor_ids) = upstream_actors.get(actor_id) {
+                for (upstream_actor_id, upstream_dispatcher_id) in upstream_actor_ids {
+                    if actor_ids.contains(upstream_actor_id) {
+                        continue;
+                    }
+
+                    let new_actor_id = old_actor_id_to_new_actor_id.get(actor_id).unwrap();
+
+                    let upstream_actor = actor_map.get(upstream_actor_id).unwrap();
+
+                    let dispatcher = upstream_actor.dispatcher.iter().find(|&dispatcher| {
+                        dispatcher.dispatcher_id == *upstream_dispatcher_id
+                    }).unwrap();
+
+                    let mut new_hash_mapping = dispatcher.hash_mapping.clone();
+
+                    if dispatcher.get_type().unwrap() == DispatcherType::Hash {
+                        if let Some(actor_mapping) = new_hash_mapping.as_mut() {
+                            for mapping_actor_id in &mut actor_mapping.data {
+                                if let Some(new_actor_id) = old_actor_id_to_new_actor_id.get(mapping_actor_id) {
+                                    *mapping_actor_id = *new_actor_id;
+                                }
+                            }
+                        }
+                    }
+
+                    let dispatcher_update = actor_dispatcher_update.entry(*upstream_actor_id).or_insert(DispatcherUpdate {
+                        dispatcher_id: dispatcher.dispatcher_id,
+                        hash_mapping: new_hash_mapping,
+                        added_downstream_actor_id: vec![],
+                        removed_downstream_actor_id: vec![],
+                    });
+
+                    dispatcher_update.added_downstream_actor_id.push(*new_actor_id);
+                    dispatcher_update.removed_downstream_actor_id.push(*actor_id);
+                }
+            }
+        }
+
+        for (actor_id, x) in &actor_dispatcher_update {
+            println!("actor_id {}", actor_id);
+            println!("\tdispatcher {}", x.dispatcher_id);
+            println!("\tmapping {:?}", x.hash_mapping);
+            println!("\tadd {:?}", x.added_downstream_actor_id);
+            println!("\trem {:?}", x.removed_downstream_actor_id);
+        }
+
+        self.barrier_manager.run_command(Command::Plain(Some(Mutation::Update(UpdateMutation {
+            actor_dispatcher_update,
+        })))).await?;
+
+        Ok(old_actor_id_to_new_actor_id)
+    }
+
     /// Create materialized view, it works as follows:
     /// 1. schedule the actors to nodes in the cluster.
     /// 2. broadcast the actor info table.
@@ -364,12 +703,21 @@ where
             upstream_worker_actors,
             &locations,
         )
-        .await?;
+            .await?;
 
         #[expect(clippy::no_effect_underscore_binding)]
         let _dependent_table_ids = &*dependent_table_ids;
         let dispatchers = &*dispatchers;
         let upstream_worker_actors = &*upstream_worker_actors;
+
+        // println!("dispatchers {:?}", dispatchers);
+        //
+        // for (a, b) in dispatchers {
+        //     println!("actor {}", a);
+        //     for dispatcher in b {
+        //         println!("\tdispatcher {:?}", dispatcher);
+        //     }
+        // }
 
         // Record vnode to parallel unit mapping for actors.
         let actor_to_vnode_mapping = {
@@ -534,6 +882,7 @@ where
                 .collect::<HashMap<_, _>>()
         };
 
+        
         // We send RPC request in two stages.
         // The first stage does 2 things: broadcast actor info, and send local actor ids to
         // different WorkerNodes. Such that each WorkerNode knows the overall actor
@@ -909,7 +1258,7 @@ mod tests {
                     compaction_group_manager.clone(),
                     compactor_manager.clone(),
                 )
-                .await?,
+                    .await?,
             );
 
             let barrier_manager = Arc::new(GlobalBarrierManager::new(
@@ -933,7 +1282,7 @@ mod tests {
                     fragment_manager.clone(),
                     compaction_group_manager.clone(),
                 )
-                .await?,
+                    .await?,
             );
 
             let stream_manager = GlobalStreamManager::new(
@@ -1255,7 +1604,7 @@ mod tests {
                 fail::remove(inject_barrier_err_success);
                 notify.notify_one();
             })
-            .unwrap();
+                .unwrap();
         });
         notify1.notified().await;
 
@@ -1289,5 +1638,154 @@ mod tests {
         );
 
         services.stop().await;
+    }
+
+    fn make_mview_stream_actors_custom(
+        start: usize,
+        stop: usize,
+        node_body: NodeBody,
+        dispatchers: Vec<Dispatcher>,
+        // upstream_actor_ids: Vec<ActorId>,
+    ) -> Vec<StreamActor> {
+        let mut actors = vec![];
+        for i in start..stop {
+            let mut new_dispatchers = vec![];
+
+            for dispatcher in &dispatchers {
+                let mut new_dispatcher = dispatcher.clone();
+                new_dispatcher.dispatcher_id = dispatcher.dispatcher_id * 1000 + i as u64;
+                new_dispatchers.push(new_dispatcher);
+            }
+
+            actors.push(StreamActor {
+                actor_id: i as u32,
+                nodes: Some(StreamNode {
+                    node_body: Some(node_body.clone()),
+                    ..Default::default()
+                }),
+                dispatcher: new_dispatchers,
+                // upstream_actor_id: upstream_actor_ids,
+                ..Default::default()
+            })
+        }
+
+        actors
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_migrate_actors() -> Result<()> {
+        let services = MockServices::start("127.0.0.1", 12333).await?;
+
+        let table_id = TableId::new(0);
+
+        let actor_groups = vec![
+            make_mview_stream_actors_custom(
+                100,
+                102,
+                NodeBody::Source(SourceNode {
+                    table_id: table_id.table_id(),
+                    ..Default::default()
+                }),
+                vec![Dispatcher {
+                    dispatcher_id: 0,
+                    downstream_actor_id: (102..105).collect_vec(),
+                    ..Default::default()
+                }],
+            ),
+            make_mview_stream_actors_custom(
+                102,
+                105,
+                NodeBody::Filter(FilterNode {
+                    ..Default::default()
+                }),
+                vec![Dispatcher {
+                    dispatcher_id: 1,
+                    downstream_actor_id: (105..109).collect_vec(),
+                    ..Default::default()
+                }],
+            ),
+            make_mview_stream_actors_custom(
+                105,
+                109,
+                NodeBody::Filter(FilterNode {
+                    ..Default::default()
+                }),
+                vec![Dispatcher {
+                    dispatcher_id: 2,
+                    downstream_actor_id: (109..111).collect_vec(),
+                    ..Default::default()
+                }],
+            ),
+            make_mview_stream_actors_custom(
+                109,
+                111,
+                NodeBody::Filter(FilterNode {
+                    ..Default::default()
+                }),
+                vec![Dispatcher {
+                    dispatcher_id: 3,
+                    downstream_actor_id: (111..112).collect_vec(),
+                    ..Default::default()
+                }],
+            ),
+            make_mview_stream_actors_custom(
+                111,
+                112,
+                NodeBody::Materialize(MaterializeNode {
+                    table_id: table_id.table_id(),
+                    ..Default::default()
+                }),
+                vec![],
+            ),
+        ];
+
+        let mut fragments = BTreeMap::default();
+
+        let actor_groups_len = actor_groups.len();
+        for (i, actor_group) in actor_groups.into_iter().enumerate() {
+            let fragment_type = if i == 0 {
+                FragmentType::Source
+            } else if i == actor_groups_len - 1 {
+                FragmentType::Sink
+            } else {
+                FragmentType::Others
+            };
+            let fragment = Fragment {
+                fragment_id: i as u32,
+                fragment_type: fragment_type as i32,
+                distribution_type: FragmentDistributionType::Hash as i32,
+                actors: actor_group.clone(),
+                vnode_mapping: None,
+            };
+
+            fragments.insert(i as crate::model::FragmentId, fragment);
+        }
+
+        let table_fragments = TableFragments::new(table_id, fragments, HashSet::default());
+
+        let mut ctx = CreateMaterializedViewContext::default();
+
+        services
+            .global_stream_manager
+            .create_materialized_view(table_fragments, &mut ctx)
+            .await?;
+
+        let mut actor_workers = HashMap::new();
+        actor_workers.insert(100, 1);
+        actor_workers.insert(106, 1);
+        actor_workers.insert(108, 1);
+        actor_workers.insert(110, 1);
+
+        let mut actors = HashMap::new();
+        actors.insert(table_id, actor_workers);
+
+        services
+            .global_stream_manager
+            .migrate_actors(actors)
+            .await
+            .unwrap();
+
+        services.stop().await;
+        Ok(())
     }
 }
