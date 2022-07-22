@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 
 use bytes::Bytes;
 use fail::fail_point;
 use futures::future::try_join_all;
 use itertools::Itertools;
+use tokio::io::AsyncRead;
 use tokio::sync::Mutex;
 
 use super::{ObjectError, ObjectResult};
@@ -60,6 +62,22 @@ impl ObjectStore for InMemObjectStore {
             .map(|block_loc| self.read(path, Some(*block_loc)))
             .collect_vec();
         try_join_all(futures).await
+    }
+
+    async fn streaming_read(
+        &self,
+        path: &str,
+        block_loc: Option<BlockLocation>,
+    ) -> ObjectResult<Box<dyn AsyncRead + Unpin>> {
+        fail_point!("mem_streaming_read_err", |_| Err(ObjectError::internal(
+            "mem streaming read error"
+        )));
+        let bytes = if let Some(loc) = block_loc {
+            self.get_object(path, |obj| find_block(obj, loc)).await?
+        } else {
+            self.get_object(path, |obj| Ok(obj.clone())).await?
+        };
+        Ok(Box::new(Cursor::new(bytes?)))
     }
 
     async fn metadata(&self, path: &str) -> ObjectResult<ObjectMetadata> {

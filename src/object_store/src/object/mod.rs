@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use tokio::io::AsyncRead;
 
 pub mod mem;
 pub use mem::*;
@@ -104,6 +105,13 @@ pub trait ObjectStore: Send + Sync {
     async fn read(&self, path: &str, block_loc: Option<BlockLocation>) -> ObjectResult<Bytes>;
 
     async fn readv(&self, path: &str, block_locs: &[BlockLocation]) -> ObjectResult<Vec<Bytes>>;
+
+    /// Returns a stream that implements `AsyncStream`
+    async fn streaming_read(
+        &self,
+        path: &str,
+        block_loc: Option<BlockLocation>,
+    ) -> ObjectResult<Box<dyn AsyncRead + Unpin>>;
 
     /// Obtains the object metadata.
     async fn metadata(&self, path: &str) -> ObjectResult<ObjectMetadata>;
@@ -205,6 +213,14 @@ impl ObjectStore for ObjectStoreImpl {
         object_store_impl_method_body!(self, metadata, path)
     }
 
+    async fn streaming_read(
+        &self,
+        path: &str,
+        block_loc: Option<BlockLocation>,
+    ) -> ObjectResult<Box<dyn AsyncRead + Unpin>> {
+        object_store_impl_method_body!(self, streaming_read, path, block_loc)
+    }
+
     async fn delete(&self, path: &str) -> ObjectResult<()> {
         object_store_impl_method_body!(self, delete, path)
     }
@@ -273,6 +289,15 @@ impl<OS: ObjectStore> MonitoredObjectStore<OS> {
             .read_bytes
             .inc_by(ret.iter().map(|block| block.len()).sum::<usize>() as u64);
         Ok(ret)
+    }
+
+    async fn streaming_read(
+        &self,
+        path: &str,
+        block_loc: Option<BlockLocation>,
+    ) -> ObjectResult<Box<dyn AsyncRead + Unpin>> {
+        // TODO: add metrics
+        self.inner.streaming_read(path, block_loc).await
     }
 
     pub async fn metadata(&self, path: &str) -> ObjectResult<ObjectMetadata> {

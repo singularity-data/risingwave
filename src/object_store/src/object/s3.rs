@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use aws_sdk_s3::client::fluent_builders::GetObject;
 use aws_sdk_s3::{Client, Endpoint, Region};
 use aws_smithy_http::body::SdkBody;
 use fail::fail_point;
 use futures::future::try_join_all;
 use itertools::Itertools;
+use tokio::io::AsyncRead;
 
 use super::{BlockLocation, ObjectError, ObjectMetadata};
 use crate::object::{Bytes, ObjectResult, ObjectStore};
@@ -48,19 +50,7 @@ impl ObjectStore for S3ObjectStore {
         fail_point!("s3_read_err", |_| Err(ObjectError::internal(
             "s3 read error"
         )));
-        let req = self.client.get_object().bucket(&self.bucket).key(path);
-
-        let range = match block_loc.as_ref() {
-            None => None,
-            Some(block_location) => block_location.byte_range_specifier(),
-        };
-
-        let req = if let Some(range) = range {
-            req.range(range)
-        } else {
-            req
-        };
-
+        let req = self.obj_store_request(path, block_loc);
         let resp = req.send().await?;
         let val = resp.body.collect().await?.into_bytes();
 
@@ -98,6 +88,32 @@ impl ObjectStore for S3ObjectStore {
         Ok(ObjectMetadata {
             total_size: resp.content_length as usize,
         })
+    }
+
+    async fn streaming_read(
+        &self,
+        path: &str,
+        block_loc: Option<BlockLocation>,
+    ) -> ObjectResult<Box<dyn AsyncRead + Unpin>> {
+        fail_point!("s3_streaming_read_err", |_| Err(ObjectError::internal(
+            "s3 streaming read error"
+        )));
+        let req = self.obj_store_request(path, block_loc);
+
+        let resp = req.send().await?;
+        Ok(Box::new(resp.body.into_async_read()))
+
+        // TODO: we may wrap stream to check an `expected_bytes: Option<usize>` parameter.
+        //
+        // if block_loc.is_some() && block_loc.as_ref().unwrap().size != val.len() {
+        //     return Err(ObjectError::internal(format!(
+        //         "mismatched size: expected {}, found {} when reading {} at {:?}",
+        //         block_loc.as_ref().unwrap().size,
+        //         val.len(),
+        //         path,
+        //         block_loc.as_ref().unwrap()
+        //     )));
+        // }
     }
 
     /// Permanently deletes the whole object.
@@ -150,6 +166,21 @@ impl S3ObjectStore {
         Self {
             client,
             bucket: bucket.to_string(),
+        }
+    }
+
+    fn obj_store_request(&self, path: &str, block_loc: Option<BlockLocation>) -> GetObject {
+        let req = self.client.get_object().bucket(&self.bucket).key(path);
+
+        let range = match block_loc.as_ref() {
+            None => None,
+            Some(block_location) => block_location.byte_range_specifier(),
+        };
+
+        if let Some(range) = range {
+            req.range(range)
+        } else {
+            req
         }
     }
 }

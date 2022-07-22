@@ -23,7 +23,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::future::try_join_all;
 use risingwave_common::cache::{CachableEntry, LruCache};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncWriteExt};
 
 use crate::object::{BlockLocation, ObjectError, ObjectMetadata, ObjectResult, ObjectStore};
 
@@ -233,6 +233,15 @@ impl ObjectStore for DiskObjectStore {
         }
 
         try_join_all(ret).await
+    }
+
+    /// Returns a stream that implements `AsyncStream`
+    async fn streaming_read(
+        &self,
+        _path: &str,
+        _block_loc: Option<BlockLocation>,
+    ) -> ObjectResult<Box<dyn AsyncRead + Unpin>> {
+        unimplemented!()
     }
 
     async fn metadata(&self, path: &str) -> ObjectResult<ObjectMetadata> {

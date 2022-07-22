@@ -18,9 +18,12 @@ use std::sync::Arc;
 use bytes::Bytes;
 use fail::fail_point;
 use risingwave_hummock_sdk::{is_remote_sst_id, HummockSSTableId};
-use risingwave_object_store::object::{get_local_path, BlockLocation, ObjectStore, ObjectStoreRef};
+use risingwave_object_store::object::{
+    get_local_path, BlockLocation, ObjectError, ObjectStore, ObjectStoreRef,
+};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
-use super::{Block, BlockCache, Sstable, SstableMeta};
+use super::{Block, BlockCache, BlockMeta, Sstable, SstableMeta};
 use crate::hummock::{BlockHolder, CachableEntry, HummockError, HummockResult, LruCache};
 use crate::monitor::StoreLocalStatistic;
 
@@ -46,6 +49,48 @@ pub struct SstableStore {
     store: ObjectStoreRef,
     block_cache: BlockCache,
     meta_cache: Arc<LruCache<HummockSSTableId, Box<Sstable>>>,
+}
+
+pub struct BlockStream {
+    byte_stream: Box<dyn AsyncRead + Unpin>,
+    block_idx: usize,
+    block_metas: Vec<BlockMeta>,
+}
+
+impl BlockStream {
+    #[allow(unused)]
+    async fn next(&mut self) -> Option<HummockResult<BlockHolder>> {
+        if self.block_idx >= self.block_metas.len() {
+            None
+        } else {
+            Some(self.next_inner().await)
+        }
+    }
+
+    async fn next_inner(&mut self) -> HummockResult<BlockHolder> {
+        let block_meta = self
+            .block_metas
+            .get(self.block_idx)
+            .ok_or_else(HummockError::invalid_block)?;
+        let block_len = block_meta.len as usize;
+        let mut variable_allocation = vec![0; block_len];
+        let bytes_read = self
+            .byte_stream
+            .read_exact(&mut variable_allocation[..])
+            .await
+            .map_err(|e| HummockError::object_io_error(ObjectError::internal(e)))?;
+        if bytes_read != block_len {
+            return Err(HummockError::object_io_error(ObjectError::internal(
+                format!(
+                    "unexpected number of bytes: expected: {} read: {}",
+                    block_meta.len as usize, bytes_read
+                ),
+            )));
+        }
+        let boxed_block = Box::new(Block::decode(Bytes::from(variable_allocation))?);
+        self.block_idx += 1;
+        Ok(BlockHolder::from_owned_block(boxed_block))
+    }
 }
 
 impl SstableStore {
@@ -196,6 +241,43 @@ impl SstableStore {
         }
     }
 
+    pub async fn get_block_stream(
+        &self,
+        sst: &Sstable,
+        start_block_index: u64,
+    ) -> HummockResult<BlockStream> {
+        // TODO: if sst has owned blocks, start from `max(start_block_idx,
+        // first_missing_sst_block_idx)`
+        let block_loc = if start_block_index != 0 {
+            let block_meta = sst
+                .meta
+                .block_metas
+                .get(start_block_index as usize)
+                .ok_or_else(HummockError::invalid_block)?;
+            let total_len: u32 = sst.meta.block_metas[start_block_index as usize..]
+                .iter()
+                .map(|m| m.len)
+                .sum();
+            let block_loc = BlockLocation {
+                offset: block_meta.offset as usize,
+                size: total_len as usize,
+            };
+            Some(block_loc)
+        } else {
+            None
+        };
+        let data_path = self.get_sst_data_path(sst.id);
+        Ok(BlockStream {
+            block_metas: sst.meta.block_metas.clone(),
+            block_idx: start_block_index as usize,
+            byte_stream: self
+                .store
+                .streaming_read(&data_path, block_loc)
+                .await
+                .map_err(HummockError::object_io_error)?,
+        })
+    }
+
     pub fn get_sst_meta_path(&self, sst_id: HummockSSTableId) -> String {
         let mut ret = format!("{}/{}.meta", self.path, sst_id);
         if !is_remote_sst_id(sst_id) {
@@ -308,7 +390,7 @@ mod tests {
     use crate::hummock::iterator::{HummockIterator, ReadOptions};
     use crate::hummock::test_utils::{default_builder_opt_for_test, gen_test_sstable_data};
     use crate::hummock::value::HummockValue;
-    use crate::hummock::{CachePolicy, SSTableIterator, Sstable};
+    use crate::hummock::{BlockIterator, CachePolicy, SSTableIterator, Sstable};
     use crate::monitor::StoreLocalStatistic;
 
     #[tokio::test]
@@ -346,6 +428,69 @@ mod tests {
             let key = iter.key();
             assert_eq!(key, iterator_test_key_of(i).as_slice());
             iter.next().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_block_stream() {
+        let sstable_store = mock_sstable_store();
+        let mut opts = default_builder_opt_for_test();
+        assert_eq!(iterator_test_key_of(0).len(), 22);
+        opts.block_capacity = 32; // make 100 blocks
+        let (data, meta, _) = gen_test_sstable_data(
+            opts,
+            (0..100).map(|x| {
+                (
+                    iterator_test_key_of(x),
+                    HummockValue::put(format!("overlapped_new_{}", x).as_bytes().to_vec()),
+                )
+            }),
+        );
+        let table = Sstable::new(1, meta.clone());
+        sstable_store
+            .put(table, data, CachePolicy::Fill)
+            .await
+            .unwrap();
+        let mut stream = sstable_store
+            .get_block_stream(&Sstable::new(1, meta.clone()), 0)
+            .await
+            .unwrap();
+
+        let mut i = 0;
+        let mut num_blocks = 0;
+        while let Some(block) = stream.next().await {
+            let mut block_iter = BlockIterator::new(block.expect("invalid block"));
+            block_iter.seek_to_first();
+            while block_iter.is_valid() {
+                assert_eq!(block_iter.key(), iterator_test_key_of(i).as_slice());
+                block_iter.next();
+                i += 1;
+            }
+            num_blocks += 1;
+        }
+        assert_eq!(i, 100);
+        assert_eq!(num_blocks, 100);
+
+        // Test with non-zero start_block_index
+        for start_index in 1..100 {
+            let mut i = start_index;
+            let mut num_blocks = 0;
+            let mut stream = sstable_store
+                .get_block_stream(&Sstable::new(1, meta.clone()), start_index as u64)
+                .await
+                .unwrap();
+            while let Some(block) = stream.next().await {
+                let mut block_iter = BlockIterator::new(block.expect("invalid block"));
+                block_iter.seek_to_first();
+                while block_iter.is_valid() {
+                    assert_eq!(block_iter.key(), iterator_test_key_of(i).as_slice());
+                    block_iter.next();
+                    i += 1;
+                }
+                num_blocks += 1;
+            }
+            assert_eq!(i, 100);
+            assert_eq!(num_blocks, 100 - start_index);
         }
     }
 }
