@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -31,20 +32,10 @@ pub struct StreamChunkBuilder {
 
     /// Data types of columns
     data_types: Vec<DataType>,
-
-    /// The start position of the columns of the side
-    /// stream coming from. If the coming side is the
-    /// left, the `update_start_pos` should be 0.
-    /// If the coming side is the right, the `update_start_pos`
-    /// is the number of columns of the left side.
-    update_start_pos: usize,
-
-    /// The start position of the columns of the opposite side
-    /// stream coming from. If the coming side is the
-    /// left, the `matched_start_pos` should be the number of columns of the left side.
-    /// If the coming side is the right, the `matched_start_pos`
-    /// should be 0.
-    matched_start_pos: usize,
+    /// map indices in matched columns to output columns
+    matched_indices_mapping: Vec<(usize, usize)>,
+    /// map indices in update columns to output columns
+    update_indices_mapping: Vec<(usize, usize)>,
 
     /// Maximum capacity of column builder
     capacity: usize,
@@ -62,9 +53,10 @@ impl Drop for StreamChunkBuilder {
 impl StreamChunkBuilder {
     pub fn new(
         capacity: usize,
-        data_types: &[DataType],
-        update_start_pos: usize,
-        matched_start_pos: usize,
+        original_data_types: &[DataType],
+        output_indices: &[usize],
+        update_range: Range<usize>,
+        matched_range: Range<usize>,
     ) -> ArrayResult<Self> {
         // Leave room for paired `UpdateDelete` and `UpdateInsert`. When there are `capacity - 1`
         // ops in current builder and the last op is `UpdateDelete`, we delay the chunk generation
@@ -74,18 +66,35 @@ impl StreamChunkBuilder {
         assert!(reduced_capacity > 0);
 
         let ops = Vec::with_capacity(reduced_capacity);
-        let column_builders = data_types
+        let data_types_after_mapping = output_indices
+            .iter()
+            .map(|&idx| original_data_types[idx].clone())
+            .collect_vec();
+        let column_builders = data_types_after_mapping
             .iter()
             .map(|datatype| datatype.create_array_builder(reduced_capacity))
             .collect();
+        let (matched_indices_mapping, update_indices_mapping) = {
+            let mut matched_indices_mapping = Vec::new();
+            let mut update_indices_mapping = Vec::new();
+            for (i, &output_idx) in output_indices.iter().enumerate() {
+                if matched_range.contains(&output_idx) {
+                    matched_indices_mapping.push((output_idx - matched_range.start, i));
+                }
+                if update_range.contains(&output_idx) {
+                    update_indices_mapping.push((output_idx - update_range.start, i));
+                }
+            }
+            (matched_indices_mapping, update_indices_mapping)
+        };
         Ok(Self {
             ops,
             column_builders,
-            data_types: data_types.to_owned(),
-            update_start_pos,
-            matched_start_pos,
+            data_types: data_types_after_mapping,
             capacity: reduced_capacity,
             size: 0,
+            matched_indices_mapping,
+            update_indices_mapping,
         })
     }
 
@@ -114,13 +123,12 @@ impl StreamChunkBuilder {
         row_matched: &Row,
     ) -> ArrayResult<Option<StreamChunk>> {
         self.ops.push(op);
-        for (i, d) in row_update.values().enumerate() {
-            self.column_builders[i + self.update_start_pos].append_datum_ref(d)?;
+        for &(update_idx, output_idx) in &self.update_indices_mapping {
+            self.column_builders[output_idx].append_datum_ref(row_update.value_at(update_idx))?;
         }
-        for (i, d) in row_matched.values().enumerate() {
-            self.column_builders[i + self.matched_start_pos].append_datum(d)?;
+        for &(matched_idx, output_idx) in &self.matched_indices_mapping {
+            self.column_builders[output_idx].append_datum(&row_matched[matched_idx])?;
         }
-
         self.inc_size()
     }
 
@@ -133,13 +141,12 @@ impl StreamChunkBuilder {
         row_update: &RowRef<'_>,
     ) -> ArrayResult<Option<StreamChunk>> {
         self.ops.push(op);
-        for (i, d) in row_update.values().enumerate() {
-            self.column_builders[i + self.update_start_pos].append_datum_ref(d)?;
+        for &(update_idx, output_idx) in &self.update_indices_mapping {
+            self.column_builders[output_idx].append_datum_ref(row_update.value_at(update_idx))?;
         }
-        for i in 0..self.column_builders.len() - row_update.size() {
-            self.column_builders[i + self.matched_start_pos].append_datum(&None)?;
+        for &(_matched_idx, output_idx) in &self.matched_indices_mapping {
+            self.column_builders[output_idx].append_datum(&None)?;
         }
-
         self.inc_size()
     }
 
@@ -152,13 +159,12 @@ impl StreamChunkBuilder {
         row_matched: &Row,
     ) -> ArrayResult<Option<StreamChunk>> {
         self.ops.push(op);
-        for i in 0..self.column_builders.len() - row_matched.size() {
-            self.column_builders[i + self.update_start_pos].append_datum_ref(None)?;
+        for &(_update_idx, output_idx) in &self.update_indices_mapping {
+            self.column_builders[output_idx].append_datum_ref(None)?;
         }
-        for i in 0..row_matched.size() {
-            self.column_builders[i + self.matched_start_pos].append_datum(&row_matched[i])?;
+        for &(matched_idx, output_idx) in &self.matched_indices_mapping {
+            self.column_builders[output_idx].append_datum(&row_matched[matched_idx])?;
         }
-
         self.inc_size()
     }
 
@@ -176,7 +182,6 @@ impl StreamChunkBuilder {
             .into_iter()
             .map(|array_impl| Column::new(Arc::new(array_impl)))
             .collect::<Vec<_>>();
-
         Ok(Some(StreamChunk::new(
             std::mem::take(&mut self.ops),
             new_columns,

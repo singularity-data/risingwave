@@ -256,10 +256,15 @@ impl<S: StateStore> DynamicFilterExecutor<S> {
             self.actor_id,
             self.metrics.clone(),
         );
-
-        let mut stream_chunk_builder =
-            StreamChunkBuilder::new(PROCESSING_WINDOW_SIZE, &self.schema.data_types(), 0, 0)
-                .map_err(StreamExecutorError::eval_error)?;
+        let output_indices: Vec<_> = (0..self.schema.data_types().len()).into_iter().collect();
+        let mut stream_chunk_builder = StreamChunkBuilder::new(
+            PROCESSING_WINDOW_SIZE,
+            &self.schema.data_types(),
+            &output_indices,
+            0..0,
+            0..self.schema.data_types().len(),
+        )
+        .map_err(StreamExecutorError::eval_error)?;
 
         #[for_await]
         for msg in aligned_stream {
