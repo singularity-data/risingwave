@@ -14,7 +14,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 use async_recursion::async_recursion;
 use itertools::Itertools;
 use risingwave_common::bail;
@@ -25,7 +24,7 @@ use risingwave_pb::catalog::{Source, Table};
 use risingwave_pb::common::{ActorInfo, ParallelUnitMapping, WorkerNode, WorkerType};
 use risingwave_pb::meta::table_fragments::{ActorState, ActorStatus};
 use risingwave_pb::stream_plan::stream_node::NodeBody;
-use risingwave_pb::stream_plan::{ActorMapping, AddMutation, Dispatcher, DispatcherType, StreamActor, StreamNode, UpdateMutation};
+use risingwave_pb::stream_plan::{ActorMapping, Dispatcher, DispatcherType, StreamActor, StreamNode, UpdateMutation};
 use risingwave_pb::stream_service::{
     BroadcastActorInfoTableRequest, BuildActorsRequest, HangingChannel, UpdateActorsRequest,
 };
@@ -595,21 +594,47 @@ impl<S> GlobalStreamManager<S>
             }
         }
 
-        for (actor_id, x) in &actor_dispatcher_update {
-            println!("actor_id {}", actor_id);
-            println!("\tdispatcher {}", x.dispatcher_id);
-            println!("\tmapping {:?}", x.hash_mapping);
-            println!("\tadd {:?}", x.added_downstream_actor_id);
-            println!("\trem {:?}", x.removed_downstream_actor_id);
-        }
+        // for (actor_id, x) in &actor_dispatcher_update {
+        //     println!("actor_id {}", actor_id);
+        //     println!("\tdispatcher {}", x.dispatcher_id);
+        //     println!("\tmapping {:?}", x.hash_mapping);
+        //     println!("\tadd {:?}", x.added_downstream_actor_id);
+        //     println!("\trem {:?}", x.removed_downstream_actor_id);
+        // }
 
         self.barrier_manager.run_command(Command::Plain(Some(Mutation::Update(UpdateMutation {
             actor_dispatcher_update,
             actor_merge_update: Default::default(),
-            dropped_actor_id: vec![]
+            dropped_actors: actor_ids.iter().cloned().collect(),
         })))).await?;
 
+
         Ok(old_actor_id_to_new_actor_id)
+    }
+
+
+    fn update_table_fragments(table_fragments: &mut TableFragments, actor_id_map: &HashMap<ActorId, ActorId>, new_actor_map: &HashMap<ActorId, StreamActor>, actor_target: &HashMap<ActorId, WorkerId>) {
+        for (fragment_id, fragment) in table_fragments.fragments.iter_mut() {
+            for actor in fragment.actors.iter_mut() {
+                if let Some(new_actor) = new_actor_map.get(&actor.actor_id) {
+                    *actor = new_actor.clone();
+                }
+            }
+
+
+            //    fragment.
+            // if let Some(mapping) = fragment.vnode_mapping.as_mut() {
+            //     mapping.
+            // }
+        }
+
+        for (actor_id, actor_status) in table_fragments.actor_status.iter_mut() {
+            if let Some(parallel_unit) = actor_status.parallel_unit.as_mut() {
+                if let Some(worker_id) = actor_target.get(actor_id) {
+                    parallel_unit.worker_node_id = *worker_id as WorkerId;
+                }
+            }
+        }
     }
 
     /// Create materialized view, it works as follows:
@@ -860,7 +885,7 @@ impl<S> GlobalStreamManager<S>
                 .collect::<HashMap<_, _>>()
         };
 
-        
+
         // We send RPC request in two stages.
         // The first stage does 2 things: broadcast actor info, and send local actor ids to
         // different WorkerNodes. Such that each WorkerNode knows the overall actor
