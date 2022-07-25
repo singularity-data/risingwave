@@ -179,19 +179,26 @@ message HashJoinNode {
   repeated int32 left_key = 2;
   repeated int32 right_key = 3;
   expr.ExprNode condition = 4;
+  // Used for internal table states.
+  catalog.Table left_table = 5;
+  // Used for internal table states.
+  catalog.Table right_table = 6;
+  // The output indices of current node
+  repeated uint32 output_indices = 7;
+
+  enum CachePolicy {
+    ONREAD = 0;
+    ONREADWRITE = 1;
+  }
   // Whether to use delta join for this hash join node. When enabled, arrangement will be created
   // on-the-fly within the plan.
   // TODO: remove this in the future when we have a separate DeltaHashJoin node.
-  bool is_delta_join = 5;
-  // Used for internal table states.
-  catalog.Table left_table = 6;
-  // Used for internal table states.
-  catalog.Table right_table = 7;
+  bool is_delta_join = 101;
+  // The cache policy to use.
+  CachePolicy cache_policy = 102;
   // Whether to optimize for append only stream.
   // It is true when the input is append-only
-  bool is_append_only = 8;
-  // The output indices of current node
-  repeated uint32 output_indices = 9;
+  bool is_append_only = 103;
 }
 
 message DynamicFilterNode {

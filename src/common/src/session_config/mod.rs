@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod query_mode;
+mod config_types;
 use std::ops::Deref;
 use std::str::FromStr;
 
-pub use query_mode::QueryMode;
+pub use config_types::{QueryMode, StreamingHashJoinCachePolicy};
 
 use crate::error::{ErrorCode, RwError};
 
 // This is a hack, &'static str is not allowed as a const generics argument.
 // TODO: refine this using the adt_const_params feature.
-const CONFIG_KEYS: [&str; 7] = [
+const CONFIG_KEYS: [&str; 8] = [
     "RW_IMPLICIT_FLUSH",
     "QUERY_MODE",
     "RW_FORCE_DELTA_JOIN",
@@ -30,6 +30,7 @@ const CONFIG_KEYS: [&str; 7] = [
     "APPLICATION_NAME",
     "DATE_STYLE",
     "RW_BATCH_ENABLE_LOOKUP_JOIN",
+    "RW_STREAMING_HASH_JOIN_POLICY",
 ];
 const IMPLICIT_FLUSH: usize = 0;
 const QUERY_MODE: usize = 1;
@@ -38,6 +39,7 @@ const EXTRA_FLOAT_DIGITS: usize = 3;
 const APPLICATION_NAME: usize = 4;
 const DATE_STYLE: usize = 5;
 const BATCH_ENABLE_LOOKUP_JOIN: usize = 6;
+const STREAMING_HASH_JOIN_CACHE_POLICY: usize = 7;
 
 trait ConfigEntry: Default + FromStr<Err = RwError> {
     fn entry_name() -> &'static str;
@@ -183,6 +185,9 @@ pub struct ConfigMap {
 
     /// To force the usage of lookup join instead of hash join in batch execution
     batch_enable_lookup_join: BatchEnableLookupJoin,
+
+    /// To set the cache policy in streaming hash join
+    streaming_hash_join_cache_policy: StreamingHashJoinCachePolicy,
 }
 
 impl ConfigMap {
@@ -201,6 +206,8 @@ impl ConfigMap {
             self.date_style = val.parse()?;
         } else if key.eq_ignore_ascii_case(BatchEnableLookupJoin::entry_name()) {
             self.batch_enable_lookup_join = val.parse()?;
+        } else if key.eq_ignore_ascii_case(StreamingHashJoinCachePolicy::entry_name()) {
+            self.streaming_hash_join_cache_policy = val.parse()?;
         } else {
             return Err(ErrorCode::UnrecognizedConfigurationParameter(key.to_string()).into());
         }
@@ -223,6 +230,8 @@ impl ConfigMap {
             Ok(self.date_style.to_string())
         } else if key.eq_ignore_ascii_case(BatchEnableLookupJoin::entry_name()) {
             Ok(self.batch_enable_lookup_join.to_string())
+        } else if key.eq_ignore_ascii_case(StreamingHashJoinCachePolicy::entry_name()) {
+            Ok(self.streaming_hash_join_cache_policy.to_string())
         } else {
             Err(ErrorCode::UnrecognizedConfigurationParameter(key.to_string()).into())
         }
@@ -265,6 +274,11 @@ impl ConfigMap {
                 setting : self.batch_enable_lookup_join.to_string(),
                 description : String::from("To enable the usage of lookup join instead of hash join when possible for local batch execution")
             },
+            VariableInfo{
+                name : StreamingHashJoinCachePolicy::entry_name().to_lowercase(),
+                setting : self.streaming_hash_join_cache_policy.to_string(),
+                description : String::from("To set the streaming hash join cache policy. Currently OnRead and OnReadWrite available")
+            },
         ]
     }
 
@@ -294,5 +308,9 @@ impl ConfigMap {
 
     pub fn get_batch_enable_lookup_join(&self) -> bool {
         *self.batch_enable_lookup_join
+    }
+
+    pub fn get_streaming_hash_join_cache_policy(&self) -> StreamingHashJoinCachePolicy {
+        self.streaming_hash_join_cache_policy
     }
 }

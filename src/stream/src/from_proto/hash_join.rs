@@ -18,12 +18,13 @@ use std::sync::Arc;
 use risingwave_common::hash::{calc_hash_key_kind, HashKey, HashKeyDispatcher, HashKeyKind};
 use risingwave_expr::expr::{build_from_prost, BoxedExpression};
 use risingwave_pb::plan_common::JoinType as JoinTypeProto;
+use risingwave_pb::stream_plan::hash_join_node::CachePolicy as CachePolicyProst;
 use risingwave_storage::table::state_table::StateTable;
 
 use super::*;
 use crate::executor::hash_join::*;
 use crate::executor::monitor::StreamingMetrics;
-use crate::executor::PkIndices;
+use crate::executor::{JoinCachePolicy, JoinCachePolicyPrimitive, PkIndices};
 
 pub struct HashJoinExecutorBuilder;
 
@@ -36,6 +37,8 @@ impl ExecutorBuilder for HashJoinExecutorBuilder {
     ) -> Result<BoxedExecutor> {
         let node = try_match_expand!(node.get_node_body().unwrap(), NodeBody::HashJoin)?;
         let is_append_only = node.is_append_only;
+        let cache_policy =
+            JoinCachePolicy::from_prost(&CachePolicyProst::from_i32(node.cache_policy).unwrap());
         let vnodes = Arc::new(params.vnode_bitmap.expect("vnodes not set for hash join"));
 
         let source_l = params.input.remove(0);
@@ -131,6 +134,7 @@ impl ExecutorBuilder for HashJoinExecutorBuilder {
             state_table_l,
             state_table_r,
             is_append_only,
+            cache_policy,
             actor_id: params.actor_id as u64,
             metrics: params.executor_stats,
         };
@@ -156,6 +160,7 @@ struct HashJoinExecutorDispatcherArgs<S: StateStore> {
     state_table_l: StateTable<S>,
     state_table_r: StateTable<S>,
     is_append_only: bool,
+    cache_policy: JoinCachePolicyPrimitive,
     actor_id: u64,
     metrics: Arc<StreamingMetrics>,
 }
@@ -181,6 +186,7 @@ impl<S: StateStore, const T: JoinTypePrimitive> HashKeyDispatcher
             args.state_table_l,
             args.state_table_r,
             args.is_append_only,
+            args.cache_policy,
             args.metrics,
         )))
     }

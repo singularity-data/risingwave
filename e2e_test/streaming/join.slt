@@ -1,3 +1,183 @@
+##################
+#  cache OnRead  #
+##################
+# INNER JOIN
+statement ok
+create table t1 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create table t2 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create materialized view mv1 as select t1.v1, t1.v2, t1.v3, t2.v1 as v10, t2.v2 as v20, t2.v3 as v30 from t1 INNER JOIN t2 ON t1.v1=t2.v1;
+
+statement ok
+insert into t1 values (1,4,2), (2,3,3);
+
+statement ok
+insert into t2 values (1,3,5), (2,4,6);
+
+statement ok
+flush;
+
+query IIIIIII rowsort
+select v1, v2, v3, v10, v20, v30 from mv1;
+----
+1 4 2 1 3 5
+2 3 3 2 4 6
+
+# LEFT JOIN
+statement ok
+create table t3 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create table t4 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create materialized view mv2 as select t3.v1, t3.v2, t3.v3, t4.v1 as v10, t4.v2 as v20, t4.v3 as v30 from t3 LEFT JOIN t4 ON t3.v1=t4.v1;
+
+statement ok
+insert into t3 values (1,4,2), (2,3,3);
+
+statement ok
+flush;
+
+query IIIIII rowsort
+select v1, v2, v3, v10, v20, v30 from mv2;
+----
+1 4 2 NULL NULL NULL
+2 3 3 NULL NULL NULL
+
+# RIGHT JOIN
+statement ok
+create table t5 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create table t6 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create materialized view mv3 as select t5.v1, t5.v2, t5.v3, t6.v1 as v10, t6.v2 as v20, t6.v3 as v30 from t5 RIGHT JOIN t6 ON t5.v1=t6.v1;
+
+statement ok
+insert into t6 values (1,3,5), (2,4,6);
+
+statement ok
+flush;
+
+query IIIIII rowsort
+select v1, v2, v3, v10, v20, v30 from mv3;
+----
+NULL NULL NULL 1 3 5
+NULL NULL NULL 2 4 6
+
+# FULL JOIN
+statement ok
+create table t7 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create table t8 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create materialized view mv4 as select t7.v1, t7.v2, t7.v3, t8.v1 as v10, t8.v2 as v20, t8.v3 as v30 from t7 FULL JOIN t8 ON t7.v1=t8.v1;
+
+statement ok
+insert into t7 values (1,4,2), (2,3,3);
+
+statement ok
+insert into t8 values (3,3,5), (4,4,6);
+
+statement ok
+flush;
+
+query IIIIII rowsort
+select v1, v2, v3, v10, v20, v30 from mv4;
+----
+NULL NULL NULL 3 3 5
+NULL NULL NULL 4 4 6
+1 4 2 NULL NULL NULL
+2 3 3 NULL NULL NULL
+
+# Non-equal join
+statement ok
+create table t9 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create table t10 (v1 int not null, v2 int not null, v3 int not null);
+
+statement ok
+create materialized view mv_full_outer_cond as select t9.v1, t9.v2, t9.v3, t10.v1 as v10, t10.v2 as v20, t10.v3 as v30 from t9 FULL JOIN t10 ON t9.v1=t10.v1 and t9.v2 > t10.v2;
+
+statement ok
+insert into t9 values (1,4,2), (2,3,3);
+
+statement ok
+insert into t10 values (1,3,5), (2,4,6);
+
+statement ok
+flush;
+
+query IIIIII rowsort
+select v1, v2, v3, v10, v20, v30 from mv_full_outer_cond;
+----
+NULL NULL NULL 2 4 6
+1 4 2 1 3 5
+2 3 3 NULL NULL NULL
+
+
+statement ok
+drop materialized view mv1
+
+statement ok
+drop materialized view mv2
+
+statement ok
+drop materialized view mv3
+
+statement ok
+drop materialized view mv4
+
+
+statement ok
+drop materialized view mv_full_outer_cond
+
+
+statement ok
+drop table t1
+
+statement ok
+drop table t2
+
+statement ok
+drop table t3
+
+statement ok
+drop table t4
+
+statement ok
+drop table t5
+
+statement ok
+drop table t6
+
+statement ok
+drop table t7
+
+statement ok
+drop table t8
+
+statement ok
+drop table t9
+
+statement ok
+drop table t10
+
+#######################
+#  cache OnReadWrite  #
+#######################
+
+statement ok
+SET RW_STREAMING_HASH_JOIN_POLICY TO OnReadWrite;
+
 # INNER JOIN
 statement ok
 create table t1 (v1 int not null, v2 int not null, v3 int not null);

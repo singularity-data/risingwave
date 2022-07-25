@@ -16,6 +16,7 @@ use std::fmt;
 
 use itertools::Itertools;
 use risingwave_common::catalog::{DatabaseId, Field, Schema, SchemaId};
+use risingwave_common::session_config::StreamingHashJoinCachePolicy;
 use risingwave_common::types::DataType;
 use risingwave_common::util::sort_util::OrderType;
 use risingwave_pb::plan_common::JoinType;
@@ -50,6 +51,9 @@ pub struct StreamHashJoin {
     /// Whether can optimize for append-only stream.
     /// It is true if input of both side is append-only
     is_append_only: bool,
+
+    /// Cache policy
+    cache_policy: StreamingHashJoinCachePolicy,
 }
 
 impl StreamHashJoin {
@@ -70,6 +74,11 @@ impl StreamHashJoin {
         );
 
         let force_delta = ctx.inner().session_ctx.config().get_delta_join();
+        let cache_policy = ctx
+            .inner()
+            .session_ctx
+            .config()
+            .get_streaming_hash_join_cache_policy();
 
         // TODO: derive from input
         let base = PlanBase::new_stream(
@@ -86,6 +95,7 @@ impl StreamHashJoin {
             eq_join_predicate,
             is_delta: force_delta,
             is_append_only: append_only,
+            cache_policy,
         }
     }
 
@@ -229,6 +239,7 @@ impl ToStreamProst for StreamHashJoin {
                 .map(|&x| x as u32)
                 .collect(),
             is_append_only: self.is_append_only,
+            cache_policy: self.cache_policy.to_prost() as _,
         })
     }
 }

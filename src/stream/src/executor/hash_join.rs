@@ -387,6 +387,7 @@ impl<K: HashKey, S: StateStore, const T: JoinTypePrimitive> HashJoinExecutor<K, 
         mut state_table_l: StateTable<S>,
         mut state_table_r: StateTable<S>,
         is_append_only: bool,
+        cache_policy: JoinCachePolicyPrimitive,
         metrics: Arc<StreamingMetrics>,
     ) -> Self {
         // TODO: enable sanity check for hash join executor <https://github.com/singularity-data/risingwave/issues/3887>
@@ -466,6 +467,7 @@ impl<K: HashKey, S: StateStore, const T: JoinTypePrimitive> HashJoinExecutor<K, 
                     metrics.clone(),
                     actor_id,
                     "left",
+                    cache_policy,
                 ), // TODO: decide the target cap
                 key_indices: params_l.key_indices,
                 col_types: col_l_datatypes,
@@ -482,6 +484,7 @@ impl<K: HashKey, S: StateStore, const T: JoinTypePrimitive> HashJoinExecutor<K, 
                     metrics.clone(),
                     actor_id,
                     "right",
+                    cache_policy,
                 ), // TODO: decide the target cap
                 key_indices: params_r.key_indices,
                 col_types: col_r_datatypes,
@@ -716,12 +719,14 @@ impl<K: HashKey, S: StateStore, const T: JoinTypePrimitive> HashJoinExecutor<K, 
                         } else {
                             side_update
                                 .ht
-                                .insert(key, pk, JoinRow::new(value, degree))?;
+                                .insert(key, pk, JoinRow::new(value, degree))
+                                .await?;
                         }
                     } else {
                         side_update
                             .ht
-                            .insert(key, pk, JoinRow::new(value, degree))?;
+                            .insert(key, pk, JoinRow::new(value, degree))
+                            .await?;
                     }
                 }
                 Op::Delete | Op::UpdateDelete => {
@@ -866,6 +871,7 @@ mod tests {
             mem_state_l,
             mem_state_r,
             false,
+            JoinCachePolicy::OnRead,
             Arc::new(StreamingMetrics::unused()),
         );
         (tx_l, tx_r, Box::new(executor).execute())
@@ -920,6 +926,7 @@ mod tests {
             mem_state_l,
             mem_state_r,
             true,
+            JoinCachePolicy::OnRead,
             Arc::new(StreamingMetrics::unused()),
         );
         (tx_l, tx_r, Box::new(executor).execute())
