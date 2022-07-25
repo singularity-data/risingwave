@@ -28,12 +28,12 @@ use risingwave_pb::expr::AggCall as ProstAggCall;
 use super::{
     BatchHashAgg, BatchSimpleAgg, ColPrunable, LogicalProjectBuilder, PlanBase, PlanRef,
     PlanTreeNodeUnary, PredicatePushdown, StreamGlobalSimpleAgg, StreamHashAgg,
-    StreamLocalSimpleAgg, ToBatch, ToStream,
+    StreamLocalSimpleAgg, StreamProject, ToBatch, ToStream,
 };
 use crate::catalog::table_catalog::TableCatalog;
 use crate::expr::{
     AggCall, AggOrderBy, Expr, ExprImpl, ExprRewriter, ExprType, FunctionCall, InputRef,
-    InputRefDisplay,
+    InputRefDisplay, Literal,
 };
 use crate::optimizer::plan_node::utils::TableCatalogBuilder;
 use crate::optimizer::plan_node::{gen_filter_and_pushdown, LogicalProject};
@@ -440,6 +440,26 @@ impl LogicalAgg {
         let total_agg_logical_plan =
             LogicalAgg::new(total_agg_types, self.group_key().to_vec(), input);
         Ok(StreamGlobalSimpleAgg::new(total_agg_logical_plan).into())
+    }
+
+    fn gen_two_phase_streaming_agg_plan_v2(&self, input_stream: PlanRef) -> Result<PlanRef> {
+        let mut exprs: Vec<_> = input_stream
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(idx, field)| InputRef::new(idx, field.data_type.clone()).into())
+            .collect();
+        exprs.push(
+            FunctionCall::new(
+                ExprType::Length,
+                vec![Literal::new(Some("hello".to_string().into()), DataType::Varchar).into()],
+            )?
+            .into(),
+        );
+        println!("[rc] exprs: {:?}", exprs);
+        let logical_project = LogicalProject::new(input_stream, exprs);
+        Ok(StreamProject::new(logical_project).into()) // TODO(rc): tmp
     }
 
     /// Check if the aggregation result will be affected by order by clause, if any.
@@ -1054,20 +1074,20 @@ impl ToStream for LogicalAgg {
             let input_stream = input.to_stream()?;
             let input_distribution = input_stream.distribution();
 
-            // simple 2-phase-agg
             if input_distribution.satisfies(&RequiredDist::AnyShard) && agg_calls_can_use_two_phase
             {
-                self.gen_two_phase_streaming_agg_plan(input_stream)
-                // simple 1-phase-agg
+                // simple 2-phase-agg
+                // self.gen_two_phase_streaming_agg_plan(input_stream)
+                self.gen_two_phase_streaming_agg_plan_v2(input_stream)
             } else {
+                // simple 1-phase-agg
                 Ok(StreamGlobalSimpleAgg::new(self.clone_with_input(
                     input.to_stream_with_dist_required(&RequiredDist::single())?,
                 ))
                 .into())
             }
-
-            // hash-agg
         } else {
+            // hash-agg
             Ok(
                 StreamHashAgg::new(self.clone_with_input(input.to_stream_with_dist_required(
                     &RequiredDist::shard_by_key(input.schema().len(), self.group_key()),
