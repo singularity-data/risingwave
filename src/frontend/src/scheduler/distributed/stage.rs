@@ -21,6 +21,7 @@ use arc_swap::ArcSwap;
 use futures::{stream, StreamExt};
 use itertools::Itertools;
 use risingwave_common::bail;
+use risingwave_common::error::ErrorCode::OK;
 use risingwave_common::util::worker_util::get_workers_by_parallel_unit_ids;
 use risingwave_pb::batch_plan::plan_node::NodeBody;
 use risingwave_pb::batch_plan::{
@@ -28,6 +29,7 @@ use risingwave_pb::batch_plan::{
     TaskId as TaskIdProst, TaskOutputId,
 };
 use risingwave_pb::common::{HostAddress, WorkerNode};
+use risingwave_pb::task_service::AbortTaskRequest;
 use risingwave_rpc_client::ComputeClientPoolRef;
 use tokio::spawn;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -53,11 +55,11 @@ enum StageState {
     Pending,
     Started {
         sender: Sender<StageMessage>,
-        handle: JoinHandle<SchedulerResult<()>>,
+        handle: JoinHandle<SchedulerResult<JoinHandle<()>>>,
     },
     Running {
-        _sender: Sender<StageMessage>,
-        _handle: JoinHandle<SchedulerResult<()>>,
+        sender: Sender<StageMessage>,
+        handle: JoinHandle<SchedulerResult<JoinHandle<()>>>,
     },
     Completed,
     Failed,
@@ -178,12 +180,10 @@ impl StageExecution {
                     compute_client_pool: self.compute_client_pool.clone(),
                 };
                 let handle = spawn(async move {
-                    if let Err(e) = runner.run().await {
+                    runner.run().await.or_else(|e| {
                         error!("Stage failed: {:?}", e);
                         Err(e)
-                    } else {
-                        Ok(())
-                    }
+                    })
                 });
 
                 *s = StageState::Started { sender, handle };
@@ -204,7 +204,18 @@ impl StageExecution {
 
     #[expect(clippy::unused_async)]
     pub async fn stop(&self) -> SchedulerResult<()> {
-        todo!()
+        let state = self.state.read().await;
+        match *state {
+            StageState::Started | StageState::Running { sender, handle } => {
+                sender.send(StageMessage::Stop);
+                // Here await the handle of stage runner (call abort RPC, changing states etc). If
+                // the handle is done, all tasks must be abort.
+                handle.await?;
+            }
+            _ => {}
+        }
+
+        Ok(())
     }
 
     pub async fn is_scheduled(&self) -> bool {
@@ -246,7 +257,10 @@ impl StageExecution {
 }
 
 impl StageRunner {
-    async fn run(self) -> SchedulerResult<()> {
+    async fn run(mut self) -> SchedulerResult<JoinHandle<SchedulerResult<()>>> {
+        // Spawn a task to listen on receiver. Once there is a stop message, we should cancel all
+        // current running tasks and change state.
+        let handle = spawn(async move { self.cancel_when_required() });
         if let Err(e) = self.schedule_tasks().await {
             error!(
                 "Stage {:?}-{:?} failed to schedule tasks, error: {:?}",
@@ -260,25 +274,64 @@ impl StageRunner {
             .await?;
             return Ok(());
         }
-
-        {
+        // Have been canceled by query manager. No need to send anymore messages.
+        if !handle.is_finished() {
             // Changing state
             let mut s = self.state.write().await;
             match mem::replace(&mut *s, StageState::Failed) {
                 StageState::Started { sender, handle } => {
                     *s = StageState::Running {
-                        _sender: sender,
-                        _handle: handle,
+                        sender: sender,
+                        handle: handle,
                     };
                 }
                 _ => unreachable!(),
             }
+            // All tasks scheduled, send `StageScheduled` event to `QueryRunner`.
+            self.send_event(QueryMessage::Stage(StageEvent::Scheduled(self.stage.id)))
+                .await?;
         }
 
-        // All tasks scheduled, send `StageScheduled` event to `QueryRunner`.
-        self.send_event(QueryMessage::Stage(StageEvent::Scheduled(self.stage.id)))
-            .await?;
+        Ok(handle)
+    }
 
+    fn cancel_when_required(&mut self) -> SchedulerResult<()> {
+        if let Some(s) = self._receiver.recv().await {
+            assert_eq!(s, StageMessage::Stop);
+            // Changing state
+            let mut s = self.state.write().await;
+            match mem::replace(&mut *s, StageState::Failed) {
+                _ => {
+                    // 1. Change state in each state runner.
+                    *s = StageState::Failed;
+                    for (task, task_status) in self.tasks.iter() {
+                        let addr = task_status
+                            .get_status()
+                            .location
+                            .as_ref()
+                            .expect("Get address should not fail");
+                        let client = self
+                            .compute_client_pool
+                            .get_client_for_addr(addr.clone().into())
+                            .await
+                            .map_err(|e| anyhow!(e))?;
+
+                        // 2. Send RPC to each compute node for each task.
+                        client
+                            .abort(AbortTaskRequest {
+                                task_id: Some(risingwave_pb::batch_plan::TaskId {
+                                    query_id: "".to_string(),
+                                    stage_id: 0,
+                                    task_id: *task,
+                                }),
+                            })
+                            .await?;
+                    }
+                }
+                // Already completed.
+                StageState::Completed => {}
+            }
+        }
         Ok(())
     }
 

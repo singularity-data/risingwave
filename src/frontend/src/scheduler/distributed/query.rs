@@ -285,7 +285,10 @@ impl QueryRunner {
                             );
                         }
                     }
-                    // TODO: We should can cancel all scheduled stages here.
+                    for (_stage_id, stage_execution) in self.stage_executions.iter() {
+                        // TODO: spawn task and await them.
+                        stage_execution.stop().await
+                    }
                 }
                 rest => {
                     return Err(SchedulerError::NotImplemented(
