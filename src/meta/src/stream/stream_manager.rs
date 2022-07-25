@@ -442,9 +442,9 @@ impl<S> GlobalStreamManager<S>
                     let upstream_worker_id = actor_id_to_worker_id.get(upstream_actor_id).unwrap();
 
                     // note: we will create local channel later
-                    if worker_id == upstream_worker_id {
-                        continue;
-                    }
+                    // if worker_id == upstream_worker_id {
+                    //     continue;
+                    // }
 
                     node_hanging_channels.entry(*upstream_worker_id).or_default()
                         .push(HangingChannel {
@@ -554,11 +554,6 @@ impl<S> GlobalStreamManager<S>
                 .await?;
         }
 
-        self.barrier_manager.run_command(Command::Plain(Some(Mutation::Add(AddMutation {
-            actor_dispatchers: Default::default(),
-            actor_splits: Default::default(),
-        })))).await.unwrap();
-
         let mut actor_dispatcher_update = HashMap::new();
         for actor_id in &actor_ids {
             if let Some(upstream_actor_ids) = upstream_actors.get(actor_id) {
@@ -610,6 +605,8 @@ impl<S> GlobalStreamManager<S>
 
         self.barrier_manager.run_command(Command::Plain(Some(Mutation::Update(UpdateMutation {
             actor_dispatcher_update,
+            actor_merge_update: Default::default(),
+            dropped_actor_id: vec![]
         })))).await?;
 
         Ok(old_actor_id_to_new_actor_id)

@@ -4535,6 +4535,7 @@ version = "0.1.10"
 dependencies = [
  "anyhow",
  "assert_matches",
+ "async-recursion",
  "async-stream",
  "async-trait",
  "axum",

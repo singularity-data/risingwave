@@ -22,7 +22,7 @@ use risingwave_pb::meta::{
     ResumeResponse,
 };
 
-use risingwave_pb::meta::{MigrateActorRequest, MigrateActorResponse}
+use risingwave_pb::meta::{MigrateActorRequest, MigrateActorResponse};
 
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
