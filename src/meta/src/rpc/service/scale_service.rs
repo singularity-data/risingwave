@@ -92,9 +92,9 @@ impl<S> ScaleService for ScaleServiceImpl<S>
             actors.insert(TableId::from(table_id), table_actors.table_actors);
         }
 
-        self.barrier_manager.run_command(Command::pause()).await?;
+        //self.barrier_manager.run_command(Command::pause()).await?;
         let resp = self.stream_manager.migrate_actors(actors).await?;
-        self.barrier_manager.run_command(Command::resume()).await?;
+        //self.barrier_manager.run_command(Command::resume()).await?;
 
         Ok(Response::new(MigrateActorResponse {
             actor_mapping: resp,

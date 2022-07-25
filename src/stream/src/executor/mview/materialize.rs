@@ -137,6 +137,8 @@ impl<S: StateStore> MaterializeExecutor<S> {
                             continue;
                         }
 
+                        println!("mv actor {} recv {:?}", self.info.identity, chunk );
+
                         // assemble pk row
 
                         // assemble row
