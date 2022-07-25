@@ -71,7 +71,7 @@ impl<TI: SstableIteratorType> ConcatIteratorInner<TI> {
         } else {
             let table = if self.read_options.prefetch {
                 self.sstable_store
-                    .load_table(self.tables[idx].id, true, &mut self.stats)
+                    .load_table(self.tables[idx].id, &mut self.stats)
                     .await?
             } else {
                 self.sstable_store

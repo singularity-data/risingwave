@@ -28,7 +28,26 @@ const MAX_META_CACHE_SHARD_BITS: usize = 2;
 const MAX_CACHE_SHARD_BITS: usize = 6; // It means that there will be 64 shards lru-cache to avoid lock conflict.
 const MIN_BUFFER_SIZE_PER_SHARD: usize = 256 * 1024 * 1024; // 256MB
 
-pub type TableHolder = CachableEntry<HummockSstableId, Box<Sstable>>;
+pub enum TableHolder {
+    CachedMeta(CachableEntry<HummockSstableId, Box<Sstable>>), /* This should never hold block
+                                                                * data. */
+    Owned(Box<Sstable>),
+}
+
+impl TableHolder {
+    pub fn value(&self) -> &Sstable {
+        match self {
+            Self::CachedMeta(meta_only_sst) => meta_only_sst.value(),
+            Self::Owned(sst) => sst,
+        }
+    }
+}
+
+impl From<CachableEntry<HummockSstableId, Box<Sstable>>> for TableHolder {
+    fn from(cached_meta: CachableEntry<HummockSstableId, Box<Sstable>>) -> Self {
+        Self::CachedMeta(cached_meta)
+    }
+}
 
 // TODO: Define policy based on use cases (read / compaction / ...).
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -232,60 +251,25 @@ impl SstableStore {
     pub async fn load_table(
         &self,
         sst_id: HummockSstableId,
-        load_data: bool,
         stats: &mut StoreLocalStatistic,
     ) -> HummockResult<TableHolder> {
-        let mut meta_data = None;
-        loop {
-            stats.cache_meta_block_total += 1;
-            let entry = self
-                .meta_cache
-                .lookup_with_request_dedup::<_, HummockError, _>(sst_id, sst_id, || {
-                    let store = self.store.clone();
-                    let meta_path = self.get_sst_meta_path(sst_id);
-                    let data_path = self.get_sst_data_path(sst_id);
-                    stats.cache_meta_block_miss += 1;
+        if let TableHolder::CachedMeta(entry) = self.sstable(sst_id, stats).await? {
+            let meta = entry.value().meta.clone();
+            // TODO: add block_data request dedup (add to object store e.g. S3 layer)
+            let data_path = self.get_sst_data_path(sst_id);
 
-                    async move {
-                        let meta = match meta_data {
-                            Some(data) => data,
-                            None => {
-                                let buf = store
-                                    .read(&meta_path, None)
-                                    .await
-                                    .map_err(HummockError::object_io_error)?;
-                                SstableMeta::decode(&mut &buf[..])?
-                            }
-                        };
-                        let mut size = meta.encoded_size();
-                        let sst = if load_data {
-                            size = meta.estimated_size as usize;
-
-                            let block_data = store
-                                .read(&data_path, None)
-                                .await
-                                .map_err(HummockError::object_io_error)?;
-                            Sstable::new_with_data(sst_id, meta, block_data)?
-                        } else {
-                            Sstable::new(sst_id, meta)
-                        };
-                        Ok((Box::new(sst), size))
-                    }
-                })
+            let block_data = self
+                .store
+                .read(&data_path, None)
                 .await
-                .map_err(|e| {
-                    HummockError::other(format!(
-                        "meta cache lookup request dedup get cancel: {:?}",
-                        e,
-                    ))
-                })??;
-            if !load_data || !entry.value().blocks.is_empty() {
-                return Ok(entry);
-            }
-            // remove sst from cache to avoid multiple thread acquire the same sstable.
-            meta_data = Some(entry.value().meta.clone());
-            drop(entry);
-            self.meta_cache.erase(sst_id, &sst_id);
+                .map_err(HummockError::object_io_error)?;
+            Ok(TableHolder::Owned(Box::new(Sstable::new_with_data(
+                sst_id, meta, block_data,
+            )?)))
+        } else {
+            Err(HummockError::meta_error(
+                "meta value must be inserted into cache",
+            ))
         }
     }
 
@@ -294,7 +278,32 @@ impl SstableStore {
         sst_id: HummockSstableId,
         stats: &mut StoreLocalStatistic,
     ) -> HummockResult<TableHolder> {
-        self.load_table(sst_id, false, stats).await
+        stats.cache_meta_block_total += 1;
+        let entry = self
+            .meta_cache
+            .lookup_with_request_dedup::<_, HummockError, _>(sst_id, sst_id, || {
+                let store = self.store.clone();
+                let meta_path = self.get_sst_meta_path(sst_id);
+                stats.cache_meta_block_miss += 1;
+
+                async move {
+                    let buf = store
+                        .read(&meta_path, None)
+                        .await
+                        .map_err(HummockError::object_io_error)?;
+                    let meta = SstableMeta::decode(&mut &buf[..])?;
+                    let size = meta.encoded_size();
+                    Ok((Box::new(Sstable::new(sst_id, meta)), size))
+                }
+            })
+            .await
+            .map_err(|e| {
+                HummockError::other(format!(
+                    "meta cache lookup request dedup get cancel: {:?}",
+                    e,
+                ))
+            })??;
+        Ok(TableHolder::CachedMeta(entry))
     }
 }
 
@@ -332,7 +341,7 @@ mod tests {
         let holder = sstable_store.sstable(1, &mut stats).await.unwrap();
         assert_eq!(holder.value().meta, meta);
         assert!(holder.value().blocks.is_empty());
-        let holder = sstable_store.load_table(1, true, &mut stats).await.unwrap();
+        let holder = sstable_store.load_table(1, &mut stats).await.unwrap();
         assert_eq!(holder.value().meta, meta);
         assert_eq!(
             holder.value().meta.block_metas.len(),

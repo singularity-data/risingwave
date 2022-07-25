@@ -42,7 +42,8 @@ pub struct BackwardSstableIterator {
 }
 
 impl BackwardSstableIterator {
-    pub fn new(sstable: TableHolder, sstable_store: SstableStoreRef) -> Self {
+    pub fn new(sstable: impl Into<TableHolder>, sstable_store: SstableStoreRef) -> Self {
+        let sstable = sstable.into();
         Self {
             block_iter: None,
             cur_idx: sstable.value().meta.block_metas.len() - 1,
@@ -150,7 +151,11 @@ impl HummockIterator for BackwardSstableIterator {
 }
 
 impl SstableIteratorType for BackwardSstableIterator {
-    fn create(sstable: TableHolder, sstable_store: SstableStoreRef, _: Arc<ReadOptions>) -> Self {
+    fn create(
+        sstable: impl Into<TableHolder>,
+        sstable_store: SstableStoreRef,
+        _: Arc<ReadOptions>,
+    ) -> Self {
         BackwardSstableIterator::new(sstable, sstable_store)
     }
 }
