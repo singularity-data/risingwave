@@ -163,7 +163,6 @@ impl SharedContext {
         );
     }
 
-
     pub fn retain_channel<F>(&self, mut f: F)
     where
         F: FnMut(&(u32, u32)) -> bool,

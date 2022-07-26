@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+
 use async_recursion::async_recursion;
 use itertools::Itertools;
 use risingwave_common::bail;
@@ -21,24 +22,28 @@ use risingwave_common::catalog::TableId;
 use risingwave_common::error::Result;
 use risingwave_common::types::{ParallelUnitId, VIRTUAL_NODE_COUNT};
 use risingwave_pb::catalog::{Source, Table};
-use risingwave_pb::meta::table_fragments::fragment::FragmentDistributionType;
 use risingwave_pb::common::{ActorInfo, ParallelUnitMapping, WorkerNode, WorkerType};
+use risingwave_pb::meta::table_fragments::fragment::FragmentDistributionType;
 use risingwave_pb::meta::table_fragments::{ActorState, ActorStatus};
+use risingwave_pb::stream_plan::barrier::Mutation;
 use risingwave_pb::stream_plan::stream_node::NodeBody;
-use risingwave_pb::stream_plan::{ActorMapping, Dispatcher, DispatcherType, StreamActor, StreamNode, UpdateMutation};
+use risingwave_pb::stream_plan::update_mutation::{DispatcherUpdate, MergeUpdate};
+use risingwave_pb::stream_plan::{
+    ActorMapping, Dispatcher, DispatcherType, StreamActor, StreamNode, UpdateMutation,
+};
 use risingwave_pb::stream_service::{
     BroadcastActorInfoTableRequest, BuildActorsRequest, HangingChannel, UpdateActorsRequest,
 };
 use risingwave_rpc_client::StreamClientPoolRef;
 use uuid::Uuid;
-use risingwave_pb::stream_plan::barrier::Mutation;
-use risingwave_pb::stream_plan::update_mutation::{DispatcherUpdate, MergeUpdate};
 
 use super::ScheduledLocations;
 use crate::barrier::{BarrierManagerRef, Command};
 use crate::cluster::{ClusterManagerRef, WorkerId};
 use crate::hummock::compaction_group::manager::CompactionGroupManagerRef;
-use crate::manager::{DatabaseId, HashMappingManagerRef, IdCategory, IdGeneratorManagerRef, MetaSrvEnv, SchemaId};
+use crate::manager::{
+    DatabaseId, HashMappingManagerRef, IdCategory, IdGeneratorManagerRef, MetaSrvEnv, SchemaId,
+};
 use crate::model::{ActorId, TableFragments};
 use crate::storage::MetaStore;
 use crate::stream::{fetch_source_fragments, FragmentManagerRef, Scheduler, SourceManagerRef};
@@ -101,8 +106,8 @@ pub struct GlobalStreamManager<S: MetaStore> {
 }
 
 impl<S> GlobalStreamManager<S>
-    where
-        S: MetaStore,
+where
+    S: MetaStore,
 {
     pub fn new(
         env: MetaSrvEnv<S>,
@@ -298,20 +303,25 @@ impl<S> GlobalStreamManager<S>
 
     #[allow(clippy::too_many_arguments)]
     #[async_recursion]
-    async fn resolve_migrate_dependent_actors(&self,
-                                              table_ids: HashSet<TableId>,
-                                              actor_map: &mut HashMap<ActorId, StreamActor>,
-                                              actor_id_to_worker_id: &mut HashMap<ActorId, WorkerId>,
-                                              actors: &mut HashMap<TableId, HashMap<ActorId, WorkerId>>,
-                                              chain_actor_ids: &mut HashSet<ActorId>,
-                                              table_fragments: &mut HashMap<TableId, TableFragments>,
-                                              cache: &mut HashSet<TableId>) -> Result<()> {
+    async fn resolve_migrate_dependent_actors(
+        &self,
+        table_ids: HashSet<TableId>,
+        actor_map: &mut HashMap<ActorId, StreamActor>,
+        actor_id_to_worker_id: &mut HashMap<ActorId, WorkerId>,
+        actors: &mut HashMap<TableId, HashMap<ActorId, WorkerId>>,
+        chain_actor_ids: &mut HashSet<ActorId>,
+        table_fragments: &mut HashMap<TableId, TableFragments>,
+        cache: &mut HashSet<TableId>,
+    ) -> Result<()> {
         for table_id in table_ids {
             if cache.contains(&table_id) {
                 continue;
             }
 
-            let fragments = self.fragment_manager.select_table_fragments_by_table_id(&table_id).await?;
+            let fragments = self
+                .fragment_manager
+                .select_table_fragments_by_table_id(&table_id)
+                .await?;
             actor_id_to_worker_id.extend(fragments.actor_to_node());
 
             let table_actor_map = fragments.actor_map();
@@ -324,7 +334,16 @@ impl<S> GlobalStreamManager<S>
             if !table_chain_actor_ids.is_empty() {
                 chain_actor_ids.extend(table_chain_actor_ids);
                 let dependent_table_ids = fragments.dependent_table_ids();
-                self.resolve_migrate_dependent_actors(dependent_table_ids, actor_map, actor_id_to_worker_id, actors, chain_actor_ids, table_fragments, cache).await?;
+                self.resolve_migrate_dependent_actors(
+                    dependent_table_ids,
+                    actor_map,
+                    actor_id_to_worker_id,
+                    actors,
+                    chain_actor_ids,
+                    table_fragments,
+                    cache,
+                )
+                .await?;
             }
 
             table_fragments.insert(table_id, fragments);
@@ -367,7 +386,9 @@ impl<S> GlobalStreamManager<S>
             &mut actors,
             &mut chain_actor_ids,
             &mut table_fragments,
-            &mut _cache).await?;
+            &mut _cache,
+        )
+        .await?;
 
         let mut actor_id_to_target_id = HashMap::new();
         for map in actors.values() {
@@ -403,13 +424,19 @@ impl<S> GlobalStreamManager<S>
             }
         }
 
-        let actor_ids: BTreeSet<ActorId> = actors.values().flat_map(|value| value.keys().into_iter().cloned()).collect();
+        let actor_ids: BTreeSet<ActorId> = actors
+            .values()
+            .flat_map(|value| value.keys().into_iter().cloned())
+            .collect();
 
         let mut recreated_actor_ids = HashMap::new();
         let mut recreated_actors = HashMap::new();
 
         for actor_id in &actor_ids {
-            let id = self.id_gen_manager.generate::<{ IdCategory::Actor }>().await? as ActorId;
+            let id = self
+                .id_gen_manager
+                .generate::<{ IdCategory::Actor }>()
+                .await? as ActorId;
             recreated_actor_ids.insert(*actor_id, id);
 
             let old_actor = actor_map.get(actor_id).unwrap();
@@ -462,7 +489,9 @@ impl<S> GlobalStreamManager<S>
                     //     continue;
                     // }
 
-                    node_hanging_channels.entry(*upstream_worker_id).or_default()
+                    node_hanging_channels
+                        .entry(*upstream_worker_id)
+                        .or_default()
                         .push(HangingChannel {
                             upstream: Some(ActorInfo {
                                 actor_id: *upstream_actor_id,
@@ -481,7 +510,10 @@ impl<S> GlobalStreamManager<S>
         let mut node_actors: HashMap<WorkerId, Vec<_>> = HashMap::new();
         for (actor_id, &worker_id) in &actor_id_to_target_id {
             let new_actor = recreated_actors.get(actor_id).unwrap();
-            node_actors.entry(worker_id).or_default().push(new_actor.clone());
+            node_actors
+                .entry(worker_id)
+                .or_default()
+                .push(new_actor.clone());
 
             let worker = worker_nodes.get(&worker_id).unwrap();
             actor_infos_to_broadcast.push(ActorInfo {
@@ -489,7 +521,6 @@ impl<S> GlobalStreamManager<S>
                 host: worker.host.clone(),
             })
         }
-
 
         let mut broadcast_node_ids = HashSet::new();
         for actor_id in &actor_ids {
@@ -532,10 +563,7 @@ impl<S> GlobalStreamManager<S>
                 hanging_channels: node_hanging_channels.remove(node_id).unwrap_or_default(),
             };
 
-            client
-                .to_owned()
-                .update_actors(request)
-                .await?;
+            client.to_owned().update_actors(request).await?;
         }
 
         // Build remaining hanging channels on compute nodes.
@@ -589,31 +617,41 @@ impl<S> GlobalStreamManager<S>
 
                     let upstream_actor = actor_map.get(upstream_actor_id).unwrap();
 
-                    let dispatcher = upstream_actor.dispatcher.iter().find(|&dispatcher| {
-                        dispatcher.dispatcher_id == *upstream_dispatcher_id
-                    }).unwrap();
+                    let dispatcher = upstream_actor
+                        .dispatcher
+                        .iter()
+                        .find(|&dispatcher| dispatcher.dispatcher_id == *upstream_dispatcher_id)
+                        .unwrap();
 
                     let mut new_hash_mapping = dispatcher.hash_mapping.clone();
 
                     if dispatcher.get_type().unwrap() == DispatcherType::Hash {
                         if let Some(actor_mapping) = new_hash_mapping.as_mut() {
                             for mapping_actor_id in &mut actor_mapping.data {
-                                if let Some(new_actor_id) = recreated_actor_ids.get(mapping_actor_id) {
+                                if let Some(new_actor_id) =
+                                    recreated_actor_ids.get(mapping_actor_id)
+                                {
                                     *mapping_actor_id = *new_actor_id;
                                 }
                             }
                         }
                     }
 
-                    let dispatcher_update = actor_dispatcher_update.entry(*upstream_actor_id).or_insert(DispatcherUpdate {
-                        dispatcher_id: dispatcher.dispatcher_id,
-                        hash_mapping: new_hash_mapping,
-                        added_downstream_actor_id: vec![],
-                        removed_downstream_actor_id: vec![],
-                    });
+                    let dispatcher_update = actor_dispatcher_update
+                        .entry(*upstream_actor_id)
+                        .or_insert(DispatcherUpdate {
+                            dispatcher_id: dispatcher.dispatcher_id,
+                            hash_mapping: new_hash_mapping,
+                            added_downstream_actor_id: vec![],
+                            removed_downstream_actor_id: vec![],
+                        });
 
-                    dispatcher_update.added_downstream_actor_id.push(*new_actor_id);
-                    dispatcher_update.removed_downstream_actor_id.push(*actor_id);
+                    dispatcher_update
+                        .added_downstream_actor_id
+                        .push(*new_actor_id);
+                    dispatcher_update
+                        .removed_downstream_actor_id
+                        .push(*actor_id);
                 }
             }
 
@@ -625,10 +663,13 @@ impl<S> GlobalStreamManager<S>
 
                     let new_actor_id = recreated_actor_ids.get(actor_id).unwrap();
 
-                    let merger_update = actor_merge_update.entry(*downstream_actor_id).or_insert(MergeUpdate {
-                        added_upstream_actor_id: vec![],
-                        removed_upstream_actor_id: vec![],
-                    });
+                    let merger_update =
+                        actor_merge_update
+                            .entry(*downstream_actor_id)
+                            .or_insert(MergeUpdate {
+                                added_upstream_actor_id: vec![],
+                                removed_upstream_actor_id: vec![],
+                            });
 
                     merger_update.added_upstream_actor_id.push(*new_actor_id);
                     merger_update.removed_upstream_actor_id.push(*actor_id);
@@ -636,17 +677,25 @@ impl<S> GlobalStreamManager<S>
             }
         }
 
-        self.barrier_manager.run_command(Command::Plain(Some(Mutation::Update(UpdateMutation {
-            actor_dispatcher_update,
-            actor_merge_update,
-            dropped_actors: actor_ids.iter().cloned().collect(),
-        })))).await?;
+        self.barrier_manager
+            .run_command(Command::Plain(Some(Mutation::Update(UpdateMutation {
+                actor_dispatcher_update,
+                actor_merge_update,
+                dropped_actors: actor_ids.iter().cloned().collect(),
+            }))))
+            .await?;
 
         let table_fragments = table_fragments.into_values().collect_vec();
 
         let (new_fragments, migrate_map) = self
             .fragment_manager
-            .recreate_actors(&actor_id_to_target_id, &recreated_actor_ids, &recreated_actors, &worker_nodes, table_fragments)
+            .recreate_actors(
+                &actor_id_to_target_id,
+                &recreated_actor_ids,
+                &recreated_actors,
+                &worker_nodes,
+                table_fragments,
+            )
             .await?;
 
         self.barrier_manager
@@ -658,9 +707,13 @@ impl<S> GlobalStreamManager<S>
         for fragments in new_fragments {
             for (fragment_id, fragment) in fragments.fragments {
                 let mapping = fragment.vnode_mapping.as_ref().unwrap();
-                let vnode_mapping = risingwave_common::util::compress::decompress_data(&mapping.original_indices, &mapping.data);
+                let vnode_mapping = risingwave_common::util::compress::decompress_data(
+                    &mapping.original_indices,
+                    &mapping.data,
+                );
                 assert_eq!(vnode_mapping.len(), VIRTUAL_NODE_COUNT);
-                self.barrier_manager.env
+                self.barrier_manager
+                    .env
                     .hash_mapping_manager()
                     .set_fragment_hash_mapping(fragment_id, vnode_mapping);
             }
@@ -668,7 +721,6 @@ impl<S> GlobalStreamManager<S>
 
         Ok(recreated_actor_ids)
     }
-
 
     /// Create materialized view, it works as follows:
     /// 1. schedule the actors to nodes in the cluster.
@@ -744,7 +796,7 @@ impl<S> GlobalStreamManager<S>
             upstream_worker_actors,
             &locations,
         )
-            .await?;
+        .await?;
 
         #[expect(clippy::no_effect_underscore_binding)]
         let _dependent_table_ids = &*dependent_table_ids;
@@ -913,7 +965,6 @@ impl<S> GlobalStreamManager<S>
                 })
                 .collect::<HashMap<_, _>>()
         };
-
 
         // We send RPC request in two stages.
         // The first stage does 2 things: broadcast actor info, and send local actor ids to
@@ -1290,7 +1341,7 @@ mod tests {
                     compaction_group_manager.clone(),
                     compactor_manager.clone(),
                 )
-                    .await?,
+                .await?,
             );
 
             let barrier_manager = Arc::new(GlobalBarrierManager::new(
@@ -1314,7 +1365,7 @@ mod tests {
                     fragment_manager.clone(),
                     compaction_group_manager.clone(),
                 )
-                    .await?,
+                .await?,
             );
 
             let stream_manager = GlobalStreamManager::new(
@@ -1636,7 +1687,7 @@ mod tests {
                 fail::remove(inject_barrier_err_success);
                 notify.notify_one();
             })
-                .unwrap();
+            .unwrap();
         });
         notify1.notified().await;
 

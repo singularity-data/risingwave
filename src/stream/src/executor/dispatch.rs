@@ -935,7 +935,7 @@ mod tests {
                 ..Default::default()
             },
         )
-            .unwrap();
+        .unwrap();
 
         let executor = Box::new(DispatchExecutor::new(
             input,
@@ -944,7 +944,7 @@ mod tests {
             ctx.clone(),
             metrics,
         ))
-            .execute();
+        .execute();
         pin_mut!(executor);
 
         // 2. Take downstream receivers.
