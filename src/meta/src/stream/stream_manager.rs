@@ -31,7 +31,7 @@ use risingwave_pb::stream_service::{
 use risingwave_rpc_client::StreamClientPoolRef;
 use uuid::Uuid;
 use risingwave_pb::stream_plan::barrier::Mutation;
-use risingwave_pb::stream_plan::update_mutation::DispatcherUpdate;
+use risingwave_pb::stream_plan::update_mutation::{DispatcherUpdate, MergeUpdate};
 
 use super::ScheduledLocations;
 use crate::barrier::{BarrierManagerRef, Command};
@@ -431,10 +431,9 @@ impl<S> GlobalStreamManager<S>
         let mut node_hanging_channels: HashMap<WorkerId, Vec<HangingChannel>> = HashMap::new();
 
         for actor_id in &actor_ids {
+            let worker_id = actor_id_to_target_id.get(actor_id).unwrap();
+            let worker = worker_nodes.get(worker_id).unwrap();
             if let Some(upstream_actor_ids) = upstream_actors.get(actor_id) {
-                let worker_id = actor_id_to_target_id.get(actor_id).unwrap();
-                let worker = worker_nodes.get(worker_id).unwrap();
-
                 for (upstream_actor_id, _upstream_dispatcher_id) in upstream_actor_ids {
                     if actor_ids.contains(upstream_actor_id) {
                         continue;
@@ -463,6 +462,32 @@ impl<S> GlobalStreamManager<S>
                         })
                 }
             }
+
+            // if let Some(downstream_actor_ids) = downstream_actors.get(actor_id) {
+            //     for downstream_actor_id in downstream_actor_ids {
+            //         if actor_ids.contains(downstream_actor_id) {
+            //             continue;
+            //         }
+            //
+            //
+            //         let downstream_worker_id = actor_id_to_worker_id.get(downstream_actor_id).unwrap();
+            //         let new_actor_id = recreated_actor_ids.get(actor_id).unwrap();
+            //         let target_worker_id = actor_id_to_target_id.get(actor_id).unwrap();
+            //         let worker = worker_nodes.get(target_worker_id).unwrap();
+            //
+            //         node_hanging_channels.entry(*downstream_worker_id).or_default()
+            //             .push(HangingChannel {
+            //                 upstream: Some(ActorInfo {
+            //                     actor_id: *new_actor_id,
+            //                     host: worker.host.clone(),
+            //                 }),
+            //                 downstream: Some(ActorInfo {
+            //                     actor_id: *downstream_actor_id,
+            //                     host: None,
+            //                 }),
+            //             })
+            //     }
+            // }
         }
 
         let mut actor_infos_to_broadcast = vec![];
@@ -484,6 +509,13 @@ impl<S> GlobalStreamManager<S>
             if let Some(upstream_actor_ids) = upstream_actors.get(actor_id) {
                 for (upstream_actor_id, _) in upstream_actor_ids {
                     let node_id = actor_id_to_worker_id.get(upstream_actor_id).unwrap();
+                    broadcast_node_ids.insert(node_id);
+                }
+            }
+
+            if let Some(downstream_actor_ids) = downstream_actors.get(actor_id) {
+                for downstream_actor_id in downstream_actor_ids {
+                    let node_id = actor_id_to_worker_id.get(downstream_actor_id).unwrap();
                     broadcast_node_ids.insert(node_id);
                 }
             }
@@ -558,6 +590,7 @@ impl<S> GlobalStreamManager<S>
         }
 
         let mut actor_dispatcher_update = HashMap::new();
+        let mut actor_merge_update = HashMap::new();
         for actor_id in &actor_ids {
             if let Some(upstream_actor_ids) = upstream_actors.get(actor_id) {
                 for (upstream_actor_id, upstream_dispatcher_id) in upstream_actor_ids {
@@ -596,11 +629,29 @@ impl<S> GlobalStreamManager<S>
                     dispatcher_update.removed_downstream_actor_id.push(*actor_id);
                 }
             }
+
+            if let Some(downstream_actor_ids) = downstream_actors.get(actor_id) {
+                for downstream_actor_id in downstream_actor_ids {
+                    if actor_ids.contains(downstream_actor_id) {
+                        continue;
+                    }
+
+                    let new_actor_id = recreated_actor_ids.get(actor_id).unwrap();
+
+                    let merger_update = actor_merge_update.entry(*downstream_actor_id).or_insert(MergeUpdate {
+                        added_upstream_actor_id: vec![],
+                        removed_upstream_actor_id: vec![],
+                    });
+
+                    merger_update.added_upstream_actor_id.push(*new_actor_id);
+                    merger_update.removed_upstream_actor_id.push(*actor_id);
+                }
+            }
         }
 
         self.barrier_manager.run_command(Command::Plain(Some(Mutation::Update(UpdateMutation {
             actor_dispatcher_update,
-            actor_merge_update: Default::default(),
+            actor_merge_update,
             dropped_actors: actor_ids.iter().cloned().collect(),
         })))).await?;
 
