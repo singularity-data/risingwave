@@ -306,7 +306,6 @@ fn update_upstreams(context: &SharedContext, ids: &[UpDownActorIds]) {
     ids.iter()
         .map(|id| {
             let (tx, rx) = channel(LOCAL_OUTPUT_CHANNEL_SIZE);
-            println!("add 3 {:?}", id);
             context.add_channel_pairs(*id, (Some(tx), Some(rx)));
         })
         .count();

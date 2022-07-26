@@ -441,10 +441,9 @@ impl<S> GlobalStreamManager<S>
 
                     let new_actor_id = recreated_actor_ids.get(actor_id).unwrap();
 
-                    // note: must exists
                     let upstream_worker_id = actor_id_to_worker_id.get(upstream_actor_id).unwrap();
 
-                    // note: we will create local channel later
+                    // note: Before PR #4045, we need to remove the local-to-local hanging_channels
                     // if worker_id == upstream_worker_id {
                     //     continue;
                     // }
@@ -462,32 +461,6 @@ impl<S> GlobalStreamManager<S>
                         })
                 }
             }
-
-            // if let Some(downstream_actor_ids) = downstream_actors.get(actor_id) {
-            //     for downstream_actor_id in downstream_actor_ids {
-            //         if actor_ids.contains(downstream_actor_id) {
-            //             continue;
-            //         }
-            //
-            //
-            //         let downstream_worker_id = actor_id_to_worker_id.get(downstream_actor_id).unwrap();
-            //         let new_actor_id = recreated_actor_ids.get(actor_id).unwrap();
-            //         let target_worker_id = actor_id_to_target_id.get(actor_id).unwrap();
-            //         let worker = worker_nodes.get(target_worker_id).unwrap();
-            //
-            //         node_hanging_channels.entry(*downstream_worker_id).or_default()
-            //             .push(HangingChannel {
-            //                 upstream: Some(ActorInfo {
-            //                     actor_id: *new_actor_id,
-            //                     host: worker.host.clone(),
-            //                 }),
-            //                 downstream: Some(ActorInfo {
-            //                     actor_id: *downstream_actor_id,
-            //                     host: None,
-            //                 }),
-            //             })
-            //     }
-            // }
         }
 
         let mut actor_infos_to_broadcast = vec![];
@@ -760,15 +733,6 @@ impl<S> GlobalStreamManager<S>
             .await?;
 
         let dispatchers = &*dispatchers;
-
-        // println!("dispatchers {:?}", dispatchers);
-        //
-        // for (a, b) in dispatchers {
-        //     println!("actor {}", a);
-        //     for dispatcher in b {
-        //         println!("\tdispatcher {:?}", dispatcher);
-        //     }
-        // }
 
         // Record vnode to parallel unit mapping for actors.
         let actor_to_vnode_mapping = {
