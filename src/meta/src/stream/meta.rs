@@ -24,7 +24,7 @@ use risingwave_common::try_match_expand;
 use risingwave_common::types::{ParallelUnitId, VIRTUAL_NODE_COUNT};
 use risingwave_common::util::compress::decompress_data;
 use risingwave_pb::common::{ParallelUnit, ParallelUnitType, WorkerNode};
-use risingwave_pb::meta::table_fragments::ActorState;
+use risingwave_pb::meta::table_fragments::{ActorState, ActorStatus};
 use risingwave_pb::stream_plan::{Dispatcher, FragmentType, StreamActor};
 use tokio::sync::RwLock;
 
@@ -62,8 +62,8 @@ pub struct BuildGraphInfo {
 pub type FragmentManagerRef<S> = Arc<FragmentManager<S>>;
 
 impl<S: MetaStore> FragmentManager<S>
-where
-    S: MetaStore,
+    where
+        S: MetaStore,
 {
     pub async fn new(env: MetaSrvEnv<S>) -> Result<Self> {
         let meta_store = env.meta_store_ref();
@@ -320,6 +320,102 @@ where
         }
     }
 
+    pub async fn recreate_actors(
+        &self,
+        migrate_map: &HashMap<ActorId, WorkerId>,
+        recreate_actor_id_map: &HashMap<ActorId, ActorId>,
+        recreated_actors: &HashMap<ActorId, StreamActor>,
+        node_map: &HashMap<WorkerId, WorkerNode>,
+        table_fragments: Vec<TableFragments>,
+    ) -> Result<(Vec<TableFragments>, HashMap<ParallelUnitId, ParallelUnit>)> {
+        let mut parallel_unit_migrate_map = HashMap::new();
+        let (mut pu_hash_map, mut pu_single_map) = Self::fetch_parallel_unit_map(node_map);
+        let mut table_fragments = table_fragments;
+        let mut new_fragments = Vec::new();
+
+        for fragment in &mut table_fragments {
+            let mut flag = false;
+
+            for fragment in fragment.fragments.values_mut() {
+                for actor in &mut fragment.actors {
+                    if let Some(recreated_actor) = recreated_actors.get(&actor.actor_id) {
+                        *actor = recreated_actor.clone();
+                    }
+                }
+            }
+
+            let fragment_migrated_actor_ids = fragment.actor_status.keys().cloned().filter(|actor_id| {
+                migrate_map.contains_key(actor_id)
+            }).collect_vec();
+
+            let mut recreate_actor_status_map = HashMap::new();
+            for actor_id in &fragment_migrated_actor_ids {
+                if let Some(status) = fragment.actor_status.remove(actor_id) {
+                    recreate_actor_status_map.insert(*actor_id, status);
+                }
+            }
+
+            let mut new_actor_status_map = HashMap::new();
+            for (actor_id, mut status) in recreate_actor_status_map {
+                if let Some(new_node_id) = migrate_map.get(&actor_id) {
+                    flag = Self::update_parallel_unit_for_actor_status(&mut parallel_unit_migrate_map, &mut pu_hash_map, &mut pu_single_map, &mut status, new_node_id);
+                    let new_actor_id = recreate_actor_id_map.get(&actor_id).unwrap();
+                    new_actor_status_map.insert(*new_actor_id, status);
+                }
+            }
+
+            for (actor_id, status) in new_actor_status_map {
+                fragment.actor_status.insert(actor_id, status);
+            }
+
+            if flag {
+                // update vnode mapping of updated fragments
+                fragment.update_vnode_mapping(&parallel_unit_migrate_map);
+                new_fragments.push(fragment.clone());
+            }
+        };
+        // update fragments
+        self.batch_update_table_fragments(&new_fragments).await?;
+        Ok((new_fragments, parallel_unit_migrate_map))
+    }
+
+    fn update_parallel_unit_for_actor_status(
+        parallel_unit_migrate_map: &mut HashMap<u32, ParallelUnit>,
+        pu_hash_map: &mut HashMap<WorkerId, Vec<&ParallelUnit>>,
+        pu_single_map: &mut HashMap<WorkerId, Vec<&ParallelUnit>>,
+        status: &mut ActorStatus,
+        new_node_id: &WorkerId,
+    ) -> bool {
+        let mut flag = false;
+        if let Some(ref old_parallel_unit) = status.parallel_unit {
+            if let Entry::Vacant(e) =
+            parallel_unit_migrate_map.entry(old_parallel_unit.id)
+            {
+                if old_parallel_unit.r#type == ParallelUnitType::Hash as i32 {
+                    let new_parallel_unit =
+                        pu_hash_map.get_mut(new_node_id).unwrap().pop().unwrap();
+                    e.insert(new_parallel_unit.clone());
+                    status.parallel_unit = Some(new_parallel_unit.clone());
+                } else {
+                    let new_parallel_unit =
+                        pu_single_map.get_mut(new_node_id).unwrap().pop().unwrap();
+                    e.insert(new_parallel_unit.clone());
+                    status.parallel_unit = Some(new_parallel_unit.clone());
+                }
+                flag = true;
+            } else {
+                status.parallel_unit = Some(
+                    parallel_unit_migrate_map
+                        .get(&old_parallel_unit.id)
+                        .unwrap()
+                        .clone(),
+                );
+            }
+        }
+
+        flag
+    }
+
     /// Used in [`crate::barrier::GlobalBarrierManager`]
     /// migrate actors and update fragments, generate migrate info
     pub async fn migrate_actors(
@@ -328,6 +424,33 @@ where
         node_map: &HashMap<WorkerId, WorkerNode>,
     ) -> Result<(Vec<TableFragments>, HashMap<ParallelUnitId, ParallelUnit>)> {
         let mut parallel_unit_migrate_map = HashMap::new();
+        let (mut pu_hash_map, mut pu_single_map) = Self::fetch_parallel_unit_map(node_map);
+        // update actor status and generate pu to pu migrate info
+        let mut table_fragments = self.list_table_fragments().await?;
+        let mut new_fragments = Vec::new();
+        table_fragments.iter_mut().for_each(|fragment| {
+            let mut flag = false;
+            fragment
+                .actor_status
+                .iter_mut()
+                .for_each(|(actor_id, status)| {
+                    if let Some(new_node_id) = migrate_map.get(actor_id) {
+                        flag = Self::update_parallel_unit_for_actor_status(&mut parallel_unit_migrate_map, &mut pu_hash_map, &mut pu_single_map, status, new_node_id);
+                    };
+                });
+            if flag {
+                // update vnode mapping of updated fragments
+                fragment.update_vnode_mapping(&parallel_unit_migrate_map);
+                new_fragments.push(fragment.clone());
+            }
+        });
+        // update fragments
+        self.batch_update_table_fragments(&new_fragments).await?;
+        Ok((new_fragments, parallel_unit_migrate_map))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn fetch_parallel_unit_map(node_map: &HashMap<WorkerId, WorkerNode>) -> (HashMap<WorkerId, Vec<&ParallelUnit>>, HashMap<WorkerId, Vec<&ParallelUnit>>) {
         let mut pu_hash_map: HashMap<WorkerId, Vec<&ParallelUnit>> = HashMap::new();
         let mut pu_single_map: HashMap<WorkerId, Vec<&ParallelUnit>> = HashMap::new();
         // split parallel units of node into types, map them with WorkerId
@@ -345,52 +468,7 @@ where
                 .collect_vec();
             pu_single_map.insert(*node_id, pu_single);
         }
-        // update actor status and generate pu to pu migrate info
-        let mut table_fragments = self.list_table_fragments().await?;
-        let mut new_fragments = Vec::new();
-        table_fragments.iter_mut().for_each(|fragment| {
-            let mut flag = false;
-            fragment
-                .actor_status
-                .iter_mut()
-                .for_each(|(actor_id, status)| {
-                    if let Some(new_node_id) = migrate_map.get(actor_id) {
-                        if let Some(ref old_parallel_unit) = status.parallel_unit {
-                            if let Entry::Vacant(e) =
-                                parallel_unit_migrate_map.entry(old_parallel_unit.id)
-                            {
-                                if old_parallel_unit.r#type == ParallelUnitType::Hash as i32 {
-                                    let new_parallel_unit =
-                                        pu_hash_map.get_mut(new_node_id).unwrap().pop().unwrap();
-                                    e.insert(new_parallel_unit.clone());
-                                    status.parallel_unit = Some(new_parallel_unit.clone());
-                                } else {
-                                    let new_parallel_unit =
-                                        pu_single_map.get_mut(new_node_id).unwrap().pop().unwrap();
-                                    e.insert(new_parallel_unit.clone());
-                                    status.parallel_unit = Some(new_parallel_unit.clone());
-                                }
-                                flag = true;
-                            } else {
-                                status.parallel_unit = Some(
-                                    parallel_unit_migrate_map
-                                        .get(&old_parallel_unit.id)
-                                        .unwrap()
-                                        .clone(),
-                                );
-                            }
-                        }
-                    };
-                });
-            if flag {
-                // update vnode mapping of updated fragments
-                fragment.update_vnode_mapping(&parallel_unit_migrate_map);
-                new_fragments.push(fragment.clone());
-            }
-        });
-        // update fragments
-        self.batch_update_table_fragments(&new_fragments).await?;
-        Ok((new_fragments, parallel_unit_migrate_map))
+        (pu_hash_map, pu_single_map)
     }
 
     pub async fn all_node_actors(
