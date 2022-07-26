@@ -605,14 +605,6 @@ impl<S> GlobalStreamManager<S>
             }
         }
 
-        // for (actor_id, x) in &actor_dispatcher_update {
-        //     println!("actor_id {}", actor_id);
-        //     println!("\tdispatcher {}", x.dispatcher_id);
-        //     println!("\tmapping {:?}", x.hash_mapping);
-        //     println!("\tadd {:?}", x.added_downstream_actor_id);
-        //     println!("\trem {:?}", x.removed_downstream_actor_id);
-        // }
-
         self.barrier_manager.run_command(Command::Plain(Some(Mutation::Update(UpdateMutation {
             actor_dispatcher_update,
             actor_merge_update: Default::default(),
