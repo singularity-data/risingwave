@@ -144,7 +144,6 @@ impl LocalBarrierManager {
                 .senders
                 .get(&actor_id)
                 .unwrap_or_else(|| panic!("sender for actor {} does not exist", actor_id));
-            println!("sending barrier {:?} to actor {}", barrier.clone(), actor_id);
             sender.send(barrier.clone()).unwrap();
         }
 
