@@ -341,6 +341,21 @@ impl<S: MetaStore> FragmentManager<S>
                 for actor in &mut fragment.actors {
                     if let Some(recreated_actor) = recreated_actors.get(&actor.actor_id) {
                         *actor = recreated_actor.clone();
+                        continue;
+                    }
+
+                    for upstream_actor_id in &mut actor.upstream_actor_id {
+                        if let Some(recreated_actor_id) = recreate_actor_id_map.get(upstream_actor_id) {
+                            *upstream_actor_id = *recreated_actor_id;
+                        }
+                    }
+
+                    for dispatcher in &mut actor.dispatcher {
+                        for downstream_actor_id in &mut dispatcher.downstream_actor_id {
+                            if let Some(recreated_actor_id) = recreate_actor_id_map.get(downstream_actor_id) {
+                                *downstream_actor_id = *recreated_actor_id;
+                            }
+                        }
                     }
                 }
             }
