@@ -296,6 +296,7 @@ impl<S> GlobalStreamManager<S>
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[async_recursion]
     async fn resolve_migrate_dependent_actors(&self,
                                               table_ids: HashSet<TableId>,
@@ -303,28 +304,30 @@ impl<S> GlobalStreamManager<S>
                                               actor_id_to_worker_id: &mut HashMap<ActorId, WorkerId>,
                                               actors: &mut HashMap<TableId, HashMap<ActorId, WorkerId>>,
                                               chain_actor_ids: &mut HashSet<ActorId>,
+                                              table_fragments: &mut HashMap<TableId, TableFragments>,
                                               cache: &mut HashSet<TableId>) -> Result<()> {
         for table_id in table_ids {
             if cache.contains(&table_id) {
                 continue;
             }
 
-            let table_fragments = self.fragment_manager.select_table_fragments_by_table_id(&table_id).await?;
-            actor_id_to_worker_id.extend(table_fragments.actor_to_node());
+            let fragments = self.fragment_manager.select_table_fragments_by_table_id(&table_id).await?;
+            actor_id_to_worker_id.extend(fragments.actor_to_node());
 
-            let table_actor_map = table_fragments.actor_map();
+            let table_actor_map = fragments.actor_map();
 
             for (actor_id, actor) in table_actor_map {
                 actor_map.insert(actor_id, actor.clone());
             }
 
-            let table_chain_actor_ids = table_fragments.chain_actor_ids();
+            let table_chain_actor_ids = fragments.chain_actor_ids();
             if !table_chain_actor_ids.is_empty() {
                 chain_actor_ids.extend(table_chain_actor_ids);
-                let dependent_table_ids = table_fragments.dependent_table_ids();
-                self.resolve_migrate_dependent_actors(dependent_table_ids, actor_map, actor_id_to_worker_id, actors, chain_actor_ids, cache).await?;
+                let dependent_table_ids = fragments.dependent_table_ids();
+                self.resolve_migrate_dependent_actors(dependent_table_ids, actor_map, actor_id_to_worker_id, actors, chain_actor_ids, table_fragments, cache).await?;
             }
 
+            table_fragments.insert(table_id, fragments);
             cache.insert(table_id);
         }
 
@@ -355,8 +358,16 @@ impl<S> GlobalStreamManager<S>
         let mut chain_actor_ids = HashSet::new();
         let mut actor_id_to_worker_id = HashMap::new();
         let mut actor_map = HashMap::new();
+        let mut table_fragments = HashMap::new();
         let mut _cache = HashSet::new();
-        self.resolve_migrate_dependent_actors(actors.keys().cloned().collect(), &mut actor_map, &mut actor_id_to_worker_id, &mut actors, &mut chain_actor_ids, &mut _cache).await?;
+        self.resolve_migrate_dependent_actors(
+            actors.keys().cloned().collect(),
+            &mut actor_map,
+            &mut actor_id_to_worker_id,
+            &mut actors,
+            &mut chain_actor_ids,
+            &mut table_fragments,
+            &mut _cache).await?;
 
         let mut actor_id_to_target_id = HashMap::new();
         let mut actor_id_to_table_id = HashMap::new();
@@ -622,34 +633,33 @@ impl<S> GlobalStreamManager<S>
             dropped_actors: actor_ids.iter().cloned().collect(),
         })))).await?;
 
+        let table_fragments = table_fragments.into_values().collect_vec();
+
+        let (new_fragments, migrate_map) = self
+            .fragment_manager
+            .recreate_actors(&actor_id_to_target_id, &old_actor_id_to_new_actor_id, &new_actor_map, &worker_nodes, table_fragments)
+            .await?;
+
+        self.barrier_manager
+            .catalog_manager
+            .update_table_mapping(&new_fragments, &migrate_map)
+            .await?;
+
+        // update hash mapping
+        for fragments in new_fragments {
+            for (fragment_id, fragment) in fragments.fragments {
+                let mapping = fragment.vnode_mapping.as_ref().unwrap();
+                let vnode_mapping = risingwave_common::util::compress::decompress_data(&mapping.original_indices, &mapping.data);
+                assert_eq!(vnode_mapping.len(), VIRTUAL_NODE_COUNT);
+                self.barrier_manager.env
+                    .hash_mapping_manager()
+                    .set_fragment_hash_mapping(fragment_id, vnode_mapping);
+            }
+        }
 
         Ok(old_actor_id_to_new_actor_id)
     }
 
-
-    fn update_table_fragments(table_fragments: &mut TableFragments, actor_id_map: &HashMap<ActorId, ActorId>, new_actor_map: &HashMap<ActorId, StreamActor>, actor_target: &HashMap<ActorId, WorkerId>) {
-        for (fragment_id, fragment) in table_fragments.fragments.iter_mut() {
-            for actor in fragment.actors.iter_mut() {
-                if let Some(new_actor) = new_actor_map.get(&actor.actor_id) {
-                    *actor = new_actor.clone();
-                }
-            }
-
-
-            //    fragment.
-            // if let Some(mapping) = fragment.vnode_mapping.as_mut() {
-            //     mapping.
-            // }
-        }
-
-        for (actor_id, actor_status) in table_fragments.actor_status.iter_mut() {
-            if let Some(parallel_unit) = actor_status.parallel_unit.as_mut() {
-                if let Some(worker_id) = actor_target.get(actor_id) {
-                    parallel_unit.worker_node_id = *worker_id as WorkerId;
-                }
-            }
-        }
-    }
 
     /// Create materialized view, it works as follows:
     /// 1. schedule the actors to nodes in the cluster.
