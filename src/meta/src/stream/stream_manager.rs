@@ -356,19 +356,16 @@ impl<S> GlobalStreamManager<S>
             &mut _cache).await?;
 
         let mut actor_id_to_target_id = HashMap::new();
-        let mut actor_id_to_table_id = HashMap::new();
-        for (table_id, map) in &actors {
+        for map in actors.values() {
             for actor_id in map.keys() {
                 if !actor_map.contains_key(actor_id) {
                     bail!("actor {} not found", actor_id);
                 }
-
-                actor_id_to_table_id.insert(*actor_id, *table_id);
             }
 
             for (&actor_id, &worker_id) in map {
                 if !worker_nodes.contains_key(&worker_id) {
-                    //bail!("worker {} not found", worker_id);
+                    bail!("worker {} not found", worker_id);
                 }
 
                 actor_id_to_target_id.insert(actor_id, worker_id);
@@ -394,14 +391,12 @@ impl<S> GlobalStreamManager<S>
 
         let actor_ids: BTreeSet<ActorId> = actors.values().flat_map(|value| value.keys().into_iter().cloned()).collect();
 
-        let mut old_actor_id_to_new_actor_id = HashMap::new();
-        let mut new_actor_id_to_old_actor_id = HashMap::new();
-        let mut new_actor_map = HashMap::new();
+        let mut recreated_actor_ids = HashMap::new();
+        let mut recreated_actors = HashMap::new();
 
         for actor_id in &actor_ids {
             let id = self.id_gen_manager.generate::<{ IdCategory::Actor }>().await? as ActorId;
-            old_actor_id_to_new_actor_id.insert(*actor_id, id);
-            new_actor_id_to_old_actor_id.insert(id, *actor_id);
+            recreated_actor_ids.insert(*actor_id, id);
 
             let old_actor = actor_map.get(actor_id).unwrap();
             let mut new_actor = old_actor.clone();
@@ -416,22 +411,21 @@ impl<S> GlobalStreamManager<S>
             }
 
             for upstream_actor_id in &mut new_actor.upstream_actor_id {
-                if let Some(new_actor_id) = old_actor_id_to_new_actor_id.get(upstream_actor_id) {
+                if let Some(new_actor_id) = recreated_actor_ids.get(upstream_actor_id) {
                     *upstream_actor_id = *new_actor_id as u32;
                 }
             }
 
             for dispatcher in &mut new_actor.dispatcher {
                 for downstream_actor_id in &mut dispatcher.downstream_actor_id {
-                    if let Some(new_actor_id) = old_actor_id_to_new_actor_id.get(downstream_actor_id) {
+                    if let Some(new_actor_id) = recreated_actor_ids.get(downstream_actor_id) {
                         *downstream_actor_id = *new_actor_id as u32;
                     }
                 }
             }
 
             new_actor.actor_id = id;
-
-            new_actor_map.insert(*actor_id as ActorId, new_actor);
+            recreated_actors.insert(*actor_id as ActorId, new_actor);
         }
 
         let mut node_hanging_channels: HashMap<WorkerId, Vec<HangingChannel>> = HashMap::new();
@@ -446,7 +440,7 @@ impl<S> GlobalStreamManager<S>
                         continue;
                     }
 
-                    let new_actor_id = old_actor_id_to_new_actor_id.get(actor_id).unwrap();
+                    let new_actor_id = recreated_actor_ids.get(actor_id).unwrap();
 
                     // note: must exists
                     let upstream_worker_id = actor_id_to_worker_id.get(upstream_actor_id).unwrap();
@@ -474,7 +468,7 @@ impl<S> GlobalStreamManager<S>
         let mut actor_infos_to_broadcast = vec![];
         let mut node_actors: HashMap<WorkerId, Vec<_>> = HashMap::new();
         for (actor_id, &worker_id) in &actor_id_to_target_id {
-            let new_actor = new_actor_map.get(actor_id).unwrap();
+            let new_actor = recreated_actors.get(actor_id).unwrap();
             node_actors.entry(worker_id).or_default().push(new_actor.clone());
 
             let worker = worker_nodes.get(&worker_id).unwrap();
@@ -525,7 +519,6 @@ impl<S> GlobalStreamManager<S>
                 .await?;
         }
 
-
         // Build remaining hanging channels on compute nodes.
         for (node_id, hanging_channels) in node_hanging_channels {
             let node = worker_nodes.get(&node_id).unwrap();
@@ -572,7 +565,7 @@ impl<S> GlobalStreamManager<S>
                         continue;
                     }
 
-                    let new_actor_id = old_actor_id_to_new_actor_id.get(actor_id).unwrap();
+                    let new_actor_id = recreated_actor_ids.get(actor_id).unwrap();
 
                     let upstream_actor = actor_map.get(upstream_actor_id).unwrap();
 
@@ -585,7 +578,7 @@ impl<S> GlobalStreamManager<S>
                     if dispatcher.get_type().unwrap() == DispatcherType::Hash {
                         if let Some(actor_mapping) = new_hash_mapping.as_mut() {
                             for mapping_actor_id in &mut actor_mapping.data {
-                                if let Some(new_actor_id) = old_actor_id_to_new_actor_id.get(mapping_actor_id) {
+                                if let Some(new_actor_id) = recreated_actor_ids.get(mapping_actor_id) {
                                     *mapping_actor_id = *new_actor_id;
                                 }
                             }
@@ -615,7 +608,7 @@ impl<S> GlobalStreamManager<S>
 
         let (new_fragments, migrate_map) = self
             .fragment_manager
-            .recreate_actors(&actor_id_to_target_id, &old_actor_id_to_new_actor_id, &new_actor_map, &worker_nodes, table_fragments)
+            .recreate_actors(&actor_id_to_target_id, &recreated_actor_ids, &recreated_actors, &worker_nodes, table_fragments)
             .await?;
 
         self.barrier_manager
@@ -635,7 +628,7 @@ impl<S> GlobalStreamManager<S>
             }
         }
 
-        Ok(old_actor_id_to_new_actor_id)
+        Ok(recreated_actor_ids)
     }
 
 
