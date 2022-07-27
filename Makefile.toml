@@ -455,7 +455,7 @@ script = """
 #!/bin/bash
 set -e
 
-cargo test "$@"
+cargo nextest run "$@"
 """
 
 [tasks.check-hakari]

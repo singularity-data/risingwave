@@ -74,5 +74,9 @@ fn main() {
 
 #[cfg(madsim)]
 fn main() {
-    panic!("planner test is not supported yet in simulation");
+    // println!("planner test is not supported yet in simulation");
+    run_tests(&Arguments::from_args(), vec![], |_: &Test<()>| {
+        Outcome::Passed
+    })
+    .exit();
 }
