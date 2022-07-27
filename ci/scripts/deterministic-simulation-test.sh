@@ -12,4 +12,4 @@ echo "--- Generate RiseDev CI config"
 cp ci/risedev-components.ci.env risedev-components.user.env
 
 echo "--- Run unit tests in deterministic simulation mode"
-cargo make stest --no-fail-fast
+timeout 7m cargo make stest --no-fail-fast

@@ -41,7 +41,7 @@ cargo make link-all-in-one-binaries
 
 echo "--- e2e, ci-3cn-1fe, streaming"
 cargo make ci-start ci-3cn-1fe
-timeout 5m sqllogictest -p 4566 -d dev  './e2e_test/streaming/**/*.slt' -j 16 --junit "parallel-streaming-${profile}"
+timeout 7m sqllogictest -p 4566 -d dev  './e2e_test/streaming/**/*.slt' -j 16 --junit "parallel-streaming-${profile}"
 
 echo "--- Kill cluster"
 cargo make ci-kill

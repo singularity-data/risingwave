@@ -146,7 +146,7 @@ steps:
           run: rw-build-env
           config: ci/docker-compose.yml
           mount-buildkite-agent: true
-    timeout_in_minutes: 5
+    timeout_in_minutes: 8
     soft_fail: true
     retry: *auto-retry
 
