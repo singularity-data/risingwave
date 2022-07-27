@@ -349,27 +349,37 @@ impl TestCase {
         }
 
         if self.batch_plan.is_some() || self.batch_plan_proto.is_some() {
-            let batch_plan = logical_plan.gen_batch_query_plan()?;
+            match logical_plan.gen_batch_query_plan() {
+                Ok(batch_plan) => {
+                    // Only generate batch_plan if it is specified in test case
+                    if self.batch_plan.is_some() {
+                        ret.batch_plan = Some(explain_plan(&batch_plan));
+                    }
 
-            // Only generate batch_plan if it is specified in test case
-            if self.batch_plan.is_some() {
-                ret.batch_plan = Some(explain_plan(&batch_plan));
-            }
-
-            // Only generate batch_plan_proto if it is specified in test case
-            if self.batch_plan_proto.is_some() {
-                ret.batch_plan_proto = Some(serde_yaml::to_string(
-                    &batch_plan.to_batch_prost_identity(false),
-                )?);
+                    // Only generate batch_plan_proto if it is specified in test case
+                    if self.batch_plan_proto.is_some() {
+                        ret.batch_plan_proto = Some(serde_yaml::to_string(
+                            &batch_plan.to_batch_prost_identity(false),
+                        )?);
+                    }
+                }
+                Err(err) => {
+                    if self.batch_plan.is_some() {
+                        ret.batch_plan = Some(err.to_string());
+                    }
+                    if self.batch_plan_proto.is_some() {
+                        ret.batch_plan_proto = Some(err.to_string());
+                    }
+                }
             }
         }
 
         if self.batch_local_plan.is_some() {
-            let batch_plan = logical_plan.gen_batch_local_plan()?;
-
-            // Only generate batch_plan if it is specified in test case
-            if self.batch_local_plan.is_some() {
-                ret.batch_local_plan = Some(explain_plan(&batch_plan));
+            match logical_plan.gen_batch_local_plan() {
+                Ok(batch_plan) => {
+                    ret.batch_local_plan = Some(explain_plan(&batch_plan));
+                }
+                Err(err) => ret.batch_local_plan = Some(err.to_string()),
             }
         }
 
@@ -380,25 +390,35 @@ impl TestCase {
                 return Err(anyhow!("expect a query"));
             };
 
-            let (stream_plan, table) = create_mv::gen_create_mv_plan(
+            match create_mv::gen_create_mv_plan(
                 &session,
                 context,
                 Box::new(q),
                 ObjectName(vec!["test".into()]),
                 HashMap::new(),
-            )?;
+            ) {
+                Ok((stream_plan, table)) => {
+                    // Only generate stream_plan if it is specified in test case
+                    if self.stream_plan.is_some() {
+                        ret.stream_plan = Some(explain_plan(&stream_plan));
+                    }
 
-            // Only generate stream_plan if it is specified in test case
-            if self.stream_plan.is_some() {
-                ret.stream_plan = Some(explain_plan(&stream_plan));
-            }
-
-            // Only generate stream_plan_proto if it is specified in test case
-            if self.stream_plan_proto.is_some() {
-                ret.stream_plan_proto = Some(
-                    serde_yaml::to_string(&stream_plan.to_stream_prost_auto_fields(false))?
-                        + &serde_yaml::to_string(&table)?,
-                );
+                    // Only generate stream_plan_proto if it is specified in test case
+                    if self.stream_plan_proto.is_some() {
+                        ret.stream_plan_proto = Some(
+                            serde_yaml::to_string(&stream_plan.to_stream_prost_auto_fields(false))?
+                                + &serde_yaml::to_string(&table)?,
+                        );
+                    }
+                }
+                Err(err) => {
+                    if self.stream_plan.is_some() {
+                        ret.stream_plan = Some(err.to_string());
+                    }
+                    if self.stream_plan_proto.is_some() {
+                        ret.stream_plan_proto = Some(err.to_string());
+                    }
+                }
             }
         }
 
