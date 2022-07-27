@@ -443,6 +443,8 @@ impl LogicalAgg {
     }
 
     fn gen_two_phase_streaming_agg_plan_v2(&self, input_stream: PlanRef) -> Result<PlanRef> {
+        assert!(self.group_key().is_empty()); // TODO(yuchao): only support simple agg currently
+
         let mut exprs: Vec<_> = input_stream
             .schema()
             .fields()
@@ -451,15 +453,40 @@ impl LogicalAgg {
             .map(|(idx, field)| InputRef::new(idx, field.data_type.clone()).into())
             .collect();
         exprs.push(
+            // TOOD(rc): change to real vnode function
             FunctionCall::new(
                 ExprType::Length,
                 vec![Literal::new(Some("hello".to_string().into()), DataType::Varchar).into()],
             )?
             .into(),
         );
-        println!("[rc] exprs: {:?}", exprs);
-        let logical_project = LogicalProject::new(input_stream, exprs);
-        Ok(StreamProject::new(logical_project).into()) // TODO(rc): tmp
+        let vnode_col_idx = exprs.len() - 1;
+        let project = StreamProject::new(LogicalProject::new(input_stream, exprs));
+
+        let local_group_key = vec![vnode_col_idx];
+        let shard_by_key = RequiredDist::shard_by_key(project.schema().len(), &local_group_key)
+            .enforce_if_not_satisfies(project.into(), &Order::any())?;
+        let local_agg = StreamHashAgg::new(LogicalAgg::new(
+            self.agg_calls().to_vec(),
+            local_group_key,
+            shard_by_key,
+        ));
+
+        let exchange =
+            RequiredDist::single().enforce_if_not_satisfies(local_agg.into(), &Order::any())?;
+        let global_agg = StreamGlobalSimpleAgg::new(LogicalAgg::new(
+            self.agg_calls()
+                .iter()
+                .enumerate()
+                .map(|(partial_output_idx, agg_call)| {
+                    agg_call.partial_to_total_agg_call(partial_output_idx)
+                })
+                .collect(),
+            self.group_key().to_vec(),
+            exchange,
+        ));
+
+        Ok(global_agg.into())
     }
 
     /// Check if the aggregation result will be affected by order by clause, if any.
