@@ -17,7 +17,8 @@ use std::fmt;
 
 use fixedbitset::FixedBitSet;
 use itertools::Itertools;
-use risingwave_common::catalog::{Field, FieldDisplay, Schema};
+use risingwave_common::array::ListValue;
+use risingwave_common::catalog::{Field, Schema};
 use risingwave_common::error::{ErrorCode, Result};
 use risingwave_common::types::DataType;
 use risingwave_common::util::sort_util::OrderType;
@@ -453,10 +454,15 @@ impl LogicalAgg {
             .map(|(idx, field)| InputRef::new(idx, field.data_type.clone()).into())
             .collect();
         exprs.push(
-            // TOOD(rc): change to real vnode function
             FunctionCall::new(
-                ExprType::Length,
-                vec![Literal::new(Some("hello".to_string().into()), DataType::Varchar).into()],
+                ExprType::Vnode,
+                vec![Literal::new(
+                    Some(ListValue::new(vec![Some(1.into()), Some(2.into())]).into()), // TODO(rc): distribution key
+                    DataType::List {
+                        datatype: Box::new(DataType::Int64),
+                    },
+                )
+                .into()],
             )?
             .into(),
         );
