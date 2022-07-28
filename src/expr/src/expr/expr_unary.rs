@@ -202,11 +202,6 @@ macro_rules! gen_round_expr {
     };
 }
 
-fn vnode_tmp(_dist_key: ListRef<'_>) -> Result<i32> {
-    // TODO(rc): implement
-    Ok(0)
-}
-
 pub fn new_unary_expr(
     expr_type: ProstType,
     return_type: DataType,
@@ -327,11 +322,6 @@ pub fn new_unary_expr(
         (ProstType::Round, _, _) => {
             gen_round_expr! {"Ceil", child_expr, return_type, round_f64, round_decimal}
         }
-        (ProstType::Vnode, _, _) => Box::new(UnaryExpression::<ListArray, I32Array, _>::new(
-            child_expr,
-            return_type,
-            vnode_tmp,
-        )),
         (expr, ret, child) => {
             return Err(ExprError::UnsupportedFunction(format!(
                 "{:?}({:?}) -> {:?}",

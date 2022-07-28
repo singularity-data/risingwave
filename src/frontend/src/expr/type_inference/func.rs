@@ -598,9 +598,6 @@ fn build_type_derive_map() -> FuncSigMap {
     // TODO: Support more `to_char` types.
     map.insert(E::ToChar, vec![T::Timestamp, T::Varchar], T::Varchar);
 
-    // internal functions
-    map.insert(E::Vnode, vec![T::List], T::Int32);
-
     map
 }
 
