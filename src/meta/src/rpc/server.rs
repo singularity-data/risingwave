@@ -420,7 +420,7 @@ pub async fn rpc_serve_with_store<S: MetaStore>(
     let ddl_srv = DdlServiceImpl::<S>::new(
         env.clone(),
         catalog_manager.clone(),
-        stream_manager,
+        stream_manager.clone(),
         source_manager,
         cluster_manager.clone(),
         fragment_manager.clone(),
@@ -429,8 +429,12 @@ pub async fn rpc_serve_with_store<S: MetaStore>(
 
     let user_srv =
         UserServiceImpl::<S>::new(env.clone(), catalog_manager.clone(), user_manager.clone());
-    let scale_srv =
-        ScaleServiceImpl::<S>::new(barrier_manager.clone(), fragment_manager.clone(), ddl_lock);
+    let scale_srv = ScaleServiceImpl::<S>::new(
+        barrier_manager.clone(),
+        fragment_manager.clone(),
+        stream_manager.clone(),
+        ddl_lock,
+    );
     let cluster_srv = ClusterServiceImpl::<S>::new(cluster_manager.clone());
     let stream_srv = StreamServiceImpl::<S>::new(
         env.clone(),

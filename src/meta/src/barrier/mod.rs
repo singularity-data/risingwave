@@ -174,7 +174,7 @@ pub struct GlobalBarrierManager<S: MetaStore> {
 
     cluster_manager: ClusterManagerRef<S>,
 
-    catalog_manager: CatalogManagerRef<S>,
+    pub(crate) catalog_manager: CatalogManagerRef<S>,
 
     fragment_manager: FragmentManagerRef<S>,
 
@@ -182,7 +182,7 @@ pub struct GlobalBarrierManager<S: MetaStore> {
 
     metrics: Arc<MetaMetrics>,
 
-    env: MetaSrvEnv<S>,
+    pub(crate) env: MetaSrvEnv<S>,
 }
 
 struct CheckpointControl<S: MetaStore> {

@@ -133,11 +133,14 @@ impl ManagedBarrierState {
                 remaining_actors, ..
             }) => {
                 let exist = remaining_actors.remove(&actor_id);
-                assert!(
-                    exist,
-                    "the actor doesn't exist. actor_id: {:?}, curr_epoch: {:?}",
-                    actor_id, barrier.epoch.curr
-                );
+                // fix me
+                if exist {
+                    assert!(
+                        exist,
+                        "the actor doesn't exist. actor_id: {:?}, curr_epoch: {:?}",
+                        actor_id, barrier.epoch.curr
+                    );
+                }
                 self.may_notify(barrier.epoch.curr);
             }
             None => {

@@ -191,7 +191,7 @@ impl TableFragments {
     }
 
     /// Returns actors that contains Chain node.
-    pub fn chain_actor_ids(&self) -> Vec<ActorId> {
+    pub fn chain_actor_ids(&self) -> HashSet<ActorId> {
         self.fragments
             .values()
             .flat_map(|fragment| {
@@ -244,6 +244,15 @@ impl TableFragments {
         for (&actor_id, actor_status) in &self.actor_status {
             let node_id = actor_status.get_parallel_unit().unwrap().worker_node_id as WorkerId;
             map.entry(node_id).or_insert_with(Vec::new).push(actor_id);
+        }
+        map
+    }
+
+    pub fn actor_to_node(&self) -> HashMap<ActorId, WorkerId> {
+        let mut map = HashMap::default();
+        for (&actor_id, actor_status) in &self.actor_status {
+            let node_id = actor_status.get_parallel_unit().unwrap().worker_node_id as WorkerId;
+            map.insert(actor_id, node_id);
         }
         map
     }
