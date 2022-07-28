@@ -14,7 +14,7 @@
 
 use std::cmp;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
 use std::sync::Arc;
@@ -57,7 +57,7 @@ impl Hash for WorkerKey {
 }
 
 /// The id preserved for the meta node. Note that there's no such entry in cluster manager.
-pub const META_NODE_ID: u32 = 0;
+pub const META_NODE_ID: u32 = 1024;
 
 /// [`ClusterManager`] manager cluster/worker meta data in [`MetaStore`].
 pub struct ClusterManager<S: MetaStore> {
@@ -105,11 +105,18 @@ where
             Some(worker) => Ok(worker.to_protobuf()),
             None => {
                 // Generate worker id.
-                let worker_id = self
-                    .env
-                    .id_gen_manager()
-                    .generate::<{ IdCategory::Worker }>()
-                    .await? as WorkerId;
+                let worker_id = match r#type {
+                    WorkerType::ComputeNode => core
+                        .next_available_cn_id()
+                        .ok_or_else(|| internal_error("failed to generate next compute node id")),
+                    WorkerType::Generic => unreachable!(),
+                    _ => self
+                        .env
+                        .id_gen_manager()
+                        .generate::<{ IdCategory::Worker }>()
+                        .await
+                        .map(|id| id as WorkerId),
+                }?;
 
                 // Generate parallel units.
                 let parallel_units = self
@@ -147,6 +154,10 @@ where
         worker.worker_node.state = State::Running as i32;
         worker.insert(self.env.meta_store()).await?;
 
+        self.env
+            .stream_client_pool()
+            .invalidate(&worker.worker_node)
+            .await;
         core.update_worker_node(worker.clone());
 
         // Notify frontends of new compute node.
@@ -169,6 +180,10 @@ where
         // Persist deletion.
         Worker::delete(self.env.meta_store(), &host_address).await?;
 
+        self.env
+            .stream_client_pool()
+            .invalidate(&worker.worker_node)
+            .await;
         // Update core.
         core.delete_worker_node(worker);
 
@@ -326,12 +341,20 @@ where
     }
 }
 
+const RESERVED_COMPUTE_NODE_ID_UPPER_BOUND: u32 = 1024;
+
 pub struct ClusterManagerCore {
     /// Record for workers in the cluster.
     workers: HashMap<WorkerKey, Worker>,
 
     /// Record for parallel units.
     parallel_units: Vec<ParallelUnit>,
+
+    /// Available compute node ids, since `RowIdGenerator` in compute node relies on worker id with
+    /// an upper bound 1024, we should generate compute node id under 1024 and be able to reuse
+    /// it. If the trigger frequency of scale in and out is relatively high, id reuse should be
+    /// necessary. Attention: we should use parallel unit id as the key in every management crate.
+    cn_available_ids: VecDeque<WorkerId>,
 }
 
 impl ClusterManagerCore {
@@ -342,16 +365,34 @@ impl ClusterManagerCore {
         let workers = try_match_expand!(Worker::list(&*meta_store).await, Ok, "Worker::list fail")?;
         let mut worker_map = HashMap::new();
         let mut parallel_units = Vec::new();
+        let mut all_alive_cn_ids = HashSet::new();
+        let mut max_cn_id = 0;
 
         workers.into_iter().for_each(|w| {
             worker_map.insert(WorkerKey(w.key().unwrap()), w.clone());
+            if w.worker_type() == WorkerType::ComputeNode {
+                all_alive_cn_ids.insert(w.worker_node.id);
+                max_cn_id = max_cn_id.max(w.worker_node.id);
+            }
             parallel_units.extend(w.worker_node.parallel_units);
         });
+
+        let cn_available_ids: VecDeque<WorkerId> = VecDeque::from_iter(
+            (max_cn_id..RESERVED_COMPUTE_NODE_ID_UPPER_BOUND)
+                .into_iter()
+                .chain((0..max_cn_id).into_iter())
+                .filter(|id| !all_alive_cn_ids.contains(id)),
+        );
 
         Ok(Self {
             workers: worker_map,
             parallel_units,
+            cn_available_ids,
         })
+    }
+
+    fn next_available_cn_id(&self) -> Option<WorkerId> {
+        self.cn_available_ids.front().cloned()
     }
 
     /// If no worker exists, return an error.
@@ -372,6 +413,13 @@ impl ClusterManagerCore {
     }
 
     fn add_worker_node(&mut self, worker: Worker) {
+        if worker.worker_type() == WorkerType::ComputeNode {
+            assert_eq!(
+                worker.worker_node.id,
+                *self.cn_available_ids.front().unwrap()
+            );
+            self.cn_available_ids.pop_front();
+        }
         self.parallel_units
             .extend(worker.worker_node.parallel_units.clone());
         self.workers
@@ -384,6 +432,9 @@ impl ClusterManagerCore {
     }
 
     fn delete_worker_node(&mut self, worker: Worker) {
+        if worker.worker_type() == WorkerType::ComputeNode {
+            self.cn_available_ids.push_back(worker.worker_node.id);
+        }
         worker
             .worker_node
             .parallel_units

@@ -65,6 +65,11 @@ impl StreamClientPool {
             .await
             .map_err(|e| anyhow!("failed to create compute client: {:?}", e).into())
     }
+
+    /// Invalidate the stream service client for the given node.
+    pub async fn invalidate(&self, node: &WorkerNode) {
+        self.clients.invalidate(&node.id).await
+    }
 }
 
 pub type StreamClientPoolRef = Arc<StreamClientPool>;

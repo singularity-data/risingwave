@@ -41,11 +41,11 @@ pub type RowId = i64;
 
 impl RowIdGenerator {
     pub fn new(worker_id: u32) -> Self {
-        assert!(worker_id < WORKER_ID_UPPER_BOUND);
         Self::with_epoch(worker_id, UNIX_EPOCH)
     }
 
     pub fn with_epoch(worker_id: u32, epoch: SystemTime) -> Self {
+        assert!(worker_id < WORKER_ID_UPPER_BOUND);
         Self {
             epoch,
             last_duration_ms: epoch.elapsed().unwrap().as_millis() as i64,

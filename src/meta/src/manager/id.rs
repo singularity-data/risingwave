@@ -239,65 +239,55 @@ mod tests {
     use std::sync::Arc;
 
     use futures::future;
+    use itertools::Itertools;
 
     use super::*;
     use crate::storage::MemStore;
 
+    async fn join_generate(generator: &dyn IdGenerator, cnt: usize) -> Result<Vec<Id>> {
+        future::join_all((0..cnt).map(|_| {
+            let id_generator = generator;
+            async move { id_generator.generate().await }
+        }))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()
+    }
+
+    async fn join_generate_interval(
+        generator: &dyn IdGenerator,
+        cnt: usize,
+        interval: i32,
+    ) -> Result<Vec<Id>> {
+        future::join_all((0..cnt).map(|_| {
+            let id_generator = generator;
+            async move { id_generator.generate_interval(interval).await }
+        }))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()
+    }
+
     #[tokio::test]
     async fn test_id_generator() -> Result<()> {
         let meta_store = Arc::new(MemStore::default());
-        let id_generator = StoredIdGenerator::new(meta_store.clone(), "default", None).await;
-        let ids = future::join_all((0..10000).map(|_i| {
-            let id_generator = &id_generator;
-            async move { id_generator.generate().await }
-        }))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        let test_id_generator = StoredIdGenerator::new(meta_store.clone(), "test", None).await;
+        let ids = join_generate(&test_id_generator, 10000).await?;
         assert_eq!(ids, (0..10000).collect::<Vec<_>>());
 
-        let id_generator_two = StoredIdGenerator::new(meta_store.clone(), "default", None).await;
-        let ids = future::join_all((0..10000).map(|_i| {
-            let id_generator = &id_generator_two;
-            async move { id_generator.generate().await }
-        }))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        let test_id_generator_2 = StoredIdGenerator::new(meta_store.clone(), "test", None).await;
+        let ids = join_generate(&test_id_generator_2, 10000).await?;
         assert_eq!(ids, (10000..20000).collect::<Vec<_>>());
 
-        let id_generator_three = StoredIdGenerator::new(meta_store.clone(), "table", None).await;
-        let ids = future::join_all((0..10000).map(|_i| {
-            let id_generator = &id_generator_three;
-            async move { id_generator.generate().await }
-        }))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
-        assert_eq!(ids, (0..10000).collect::<Vec<_>>());
-
         let actor_id_generator = StoredIdGenerator::new(meta_store.clone(), "actor", Some(1)).await;
-        let ids = future::join_all((0..100).map(|_i| {
-            let id_generator = &actor_id_generator;
-            async move { id_generator.generate_interval(100).await }
-        }))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
-
-        let vec_expect = (0..100).map(|e| e * 100 + 1).collect::<Vec<_>>();
+        let ids = join_generate_interval(&actor_id_generator, 100, 100).await?;
+        let vec_expect = (0..100).map(|e| e * 100 + 1).collect_vec();
         assert_eq!(ids, vec_expect);
 
         let actor_id_generator_two = StoredIdGenerator::new(meta_store, "actor", None).await;
-        let ids = future::join_all((0..100).map(|_i| {
-            let id_generator = &actor_id_generator_two;
-            async move { id_generator.generate_interval(10).await }
-        }))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        let ids = join_generate_interval(&actor_id_generator_two, 100, 10).await?;
 
-        let vec_expect = (0..100).map(|e| 10001 + e * 10).collect::<Vec<_>>();
+        let vec_expect = (0..100).map(|e| 10001 + e * 10).collect_vec();
         assert_eq!(ids, vec_expect);
 
         Ok(())
@@ -314,7 +304,7 @@ mod tests {
         .await
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
-        assert_eq!(ids, (0..10000).collect::<Vec<_>>());
+        assert_eq!(ids, (0..10000).collect_vec());
 
         let ids = future::join_all((0..100).map(|_i| {
             let manager = &manager;
@@ -327,7 +317,7 @@ mod tests {
         .await
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
-        let vec_expect = (0..100).map(|e| e * 9999 + 1).collect::<Vec<_>>();
+        let vec_expect = (0..100).map(|e| e * 9999 + 1).collect_vec();
         assert_eq!(ids, vec_expect);
 
         let manager = IdGeneratorManager::new(meta_store).await;
