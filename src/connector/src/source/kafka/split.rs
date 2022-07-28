@@ -63,4 +63,8 @@ impl KafkaSplit {
             self.topic.clone(),
         )
     }
+
+    pub fn get_topic_and_partition(&self) -> (String, i32) {
+        (self.topic.clone(), self.partition)
+    }
 }

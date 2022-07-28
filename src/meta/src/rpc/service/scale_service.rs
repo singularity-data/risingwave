@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use risingwave_common::error::tonic_err;
+use risingwave_pb::catalog::source::Info::StreamSource;
 use risingwave_pb::common::WorkerType;
+use risingwave_pb::meta::get_cluster_info_response::multiple_split_item::Split;
+use risingwave_pb::meta::get_cluster_info_response::{
+    KafkaSplit, MultipleSplitItem, MultipleSplits,
+};
 use risingwave_pb::meta::scale_service_server::ScaleService;
 use risingwave_pb::meta::{
     GetClusterInfoRequest, GetClusterInfoResponse, PauseRequest, PauseResponse, ResumeRequest,
@@ -25,14 +32,17 @@ use tonic::{Request, Response, Status};
 
 use crate::barrier::{BarrierManagerRef, Command};
 use crate::cluster::ClusterManagerRef;
+use crate::manager::CatalogManagerRef;
 use crate::model::MetadataModel;
 use crate::storage::MetaStore;
-use crate::stream::FragmentManagerRef;
+use crate::stream::{FragmentManagerRef, SourceManagerRef};
 
 pub struct ScaleServiceImpl<S: MetaStore> {
     barrier_manager: BarrierManagerRef<S>,
     fragment_manager: FragmentManagerRef<S>,
     cluster_manager: ClusterManagerRef<S>,
+    source_manager: SourceManagerRef<S>,
+    catalog_manager: CatalogManagerRef<S>,
     ddl_lock: Arc<RwLock<()>>,
 }
 
@@ -44,12 +54,16 @@ where
         barrier_manager: BarrierManagerRef<S>,
         fragment_manager: FragmentManagerRef<S>,
         cluster_manager: ClusterManagerRef<S>,
+        source_manager: SourceManagerRef<S>,
+        catalog_manager: CatalogManagerRef<S>,
         ddl_lock: Arc<RwLock<()>>,
     ) -> Self {
         Self {
             barrier_manager,
             fragment_manager,
             cluster_manager,
+            source_manager,
+            catalog_manager,
             ddl_lock,
         }
     }
@@ -92,9 +106,53 @@ where
             .list_worker_node(WorkerType::ComputeNode, None)
             .await;
 
+        let actor_splits = self
+            .source_manager
+            .get_actor_splits()
+            .await
+            .into_iter()
+            .map(|(id, split_impl_vec)| {
+                let multiple_splits = MultipleSplits {
+                    // Currently orchestrator only support Kafka Source
+                    items: split_impl_vec
+                        .into_iter()
+                        .filter(|split_impl| split_impl.as_kafka().is_some())
+                        .map(|split_impl| {
+                            let (topic, partition) =
+                                split_impl.as_kafka().unwrap().get_topic_and_partition();
+                            MultipleSplitItem {
+                                split: Some(Split::KafkaSplit(KafkaSplit {
+                                    topic,
+                                    partition,
+                                    group_id: String::new(),
+                                })),
+                            }
+                        })
+                        .collect(),
+                };
+                (id, multiple_splits)
+            })
+            .collect();
+
+        let sources = self
+            .catalog_manager
+            .get_catalog_core_guard()
+            .await
+            .list_sources()
+            .await
+            .map_err(tonic_err)?;
+        let mut stream_source_infos = HashMap::new();
+        for source in sources {
+            if let Some(StreamSource(info)) = source.info {
+                stream_source_infos.insert(source.id, info);
+            }
+        }
+
         Ok(Response::new(GetClusterInfoResponse {
             worker_nodes,
             table_fragments,
+            actor_splits,
+            stream_source_infos,
         }))
     }
 }

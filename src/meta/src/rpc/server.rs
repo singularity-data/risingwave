@@ -421,7 +421,7 @@ pub async fn rpc_serve_with_store<S: MetaStore>(
         env.clone(),
         catalog_manager.clone(),
         stream_manager,
-        source_manager,
+        source_manager.clone(),
         cluster_manager.clone(),
         fragment_manager.clone(),
         ddl_lock.clone(),
@@ -433,6 +433,8 @@ pub async fn rpc_serve_with_store<S: MetaStore>(
         barrier_manager.clone(),
         fragment_manager.clone(),
         cluster_manager.clone(),
+        source_manager,
+        catalog_manager.clone(),
         ddl_lock,
     );
     let cluster_srv = ClusterServiceImpl::<S>::new(cluster_manager.clone());

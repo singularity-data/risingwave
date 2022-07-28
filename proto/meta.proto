@@ -208,6 +208,22 @@ message GetClusterInfoRequest {}
 message GetClusterInfoResponse {
   repeated common.WorkerNode worker_nodes = 1;
   repeated TableFragments table_fragments = 2;
+  message KafkaSplit {
+    string topic = 1;
+    int32 partition = 2;
+    string group_id = 3;
+  }
+  message MultipleSplitItem {
+    oneof split {
+      // only consider KafkaSplit for now
+      KafkaSplit kafka_split = 1;
+    }
+  }
+  message MultipleSplits {
+    repeated MultipleSplitItem items = 1;
+  }
+  map<uint32, MultipleSplits> actor_splits = 3;
+  map<uint32, catalog.StreamSourceInfo> stream_source_infos = 4;
 }
 
 service ScaleService {
