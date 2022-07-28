@@ -18,7 +18,7 @@ use itertools::Itertools;
 use risingwave_pb::hummock::{HummockVersion, HummockVersionDelta, Level, SstableInfo};
 
 use crate::prost_key_range::KeyRangeExt;
-use crate::CompactionGroupId;
+use crate::{CompactionGroupId, HummockSstableId};
 
 pub trait HummockVersionExt {
     /// Gets `compaction_group_id`'s levels
@@ -184,5 +184,36 @@ fn level_insert_ssts(
                 a.compare(b)
             });
         }
+    }
+}
+
+pub trait HummockVersionDeltaExt {
+    fn get_removed_sst_ids(&self) -> Vec<HummockSstableId>;
+    fn get_inserted_sst_ids(&self) -> Vec<HummockSstableId>;
+}
+
+impl HummockVersionDeltaExt for HummockVersionDelta {
+    fn get_removed_sst_ids(&self) -> Vec<HummockSstableId> {
+        let mut ret = vec![];
+        for level_deltas in self.level_deltas.values() {
+            for level_delta in &level_deltas.level_deltas {
+                for sst_id in &level_delta.removed_table_ids {
+                    ret.push(*sst_id);
+                }
+            }
+        }
+        ret
+    }
+
+    fn get_inserted_sst_ids(&self) -> Vec<HummockSstableId> {
+        let mut ret = vec![];
+        for level_deltas in self.level_deltas.values() {
+            for level_delta in &level_deltas.level_deltas {
+                for sst in &level_delta.inserted_table_infos {
+                    ret.push(sst.id);
+                }
+            }
+        }
+        ret
     }
 }

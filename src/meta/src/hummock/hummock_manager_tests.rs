@@ -928,3 +928,42 @@ async fn test_trigger_manual_compaction() {
         assert!(result.is_err());
     }
 }
+
+#[tokio::test]
+async fn test_extend_ssts_to_delete_from_scan() {
+    let (_env, hummock_manager, _cluster_manager, _worker_node) = setup_compute_env(80).await;
+
+    // Add some sstables and commit.
+    let epoch: u64 = 1;
+    let ssts_to_commit = generate_test_tables(epoch, get_sst_ids(&hummock_manager, 2).await);
+    register_sstable_infos_to_compaction_group(
+        hummock_manager.compaction_group_manager_ref_for_test(),
+        &ssts_to_commit,
+        StaticCompactionGroupId::StateDefault.into(),
+    )
+    .await;
+    hummock_manager
+        .commit_epoch(epoch, to_local_sstable_info(&ssts_to_commit))
+        .await
+        .unwrap();
+
+    let max_committed_sst_id = ssts_to_commit
+        .iter()
+        .max_by_key(|s| s.id)
+        .map(|s| s.id)
+        .unwrap();
+    let orphan_sst_num = 10;
+    let orphan_sst_ids = ssts_to_commit
+        .iter()
+        .map(|s| s.id)
+        .chain(max_committed_sst_id + 1..=max_committed_sst_id + orphan_sst_num)
+        .collect_vec();
+    assert!(hummock_manager.get_ssts_to_delete().await.is_empty());
+    hummock_manager
+        .extend_ssts_to_delete_from_scan(&orphan_sst_ids)
+        .await;
+    assert_eq!(
+        hummock_manager.get_ssts_to_delete().await.len(),
+        orphan_sst_num as usize
+    );
+}

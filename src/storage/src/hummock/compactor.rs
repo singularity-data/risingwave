@@ -35,9 +35,7 @@ use risingwave_hummock_sdk::key_range::KeyRange;
 use risingwave_hummock_sdk::slice_transform::SliceTransformImpl;
 use risingwave_hummock_sdk::{CompactionGroupId, HummockSstableId, VersionedComparator};
 use risingwave_pb::hummock::subscribe_compact_tasks_response::Task;
-use risingwave_pb::hummock::{
-    CompactTask, LevelType, SstableInfo, SubscribeCompactTasksResponse, VacuumTask,
-};
+use risingwave_pb::hummock::{CompactTask, LevelType, SstableInfo, SubscribeCompactTasksResponse};
 use risingwave_rpc_client::HummockMetaClient;
 use tokio::sync::oneshot::Sender;
 use tokio::task::JoinHandle;
@@ -653,7 +651,7 @@ impl Compactor {
             .await
         {
             tracing::warn!(
-                "Failed to report compaction task: {}, error: {}",
+                "Failed to report compaction task: {}, error: {:#?}",
                 self.compact_task.task_id,
                 e
             );
@@ -842,28 +840,6 @@ impl Compactor {
         )))
     }
 
-    pub async fn vacuum(
-        vacuum_task: VacuumTask,
-        sstable_store: SstableStoreRef,
-        hummock_meta_client: Arc<dyn HummockMetaClient>,
-    ) {
-        tracing::info!("Try to vacuum SSTs {:?}", vacuum_task.sstable_ids);
-        match Vacuum::vacuum(
-            sstable_store.clone(),
-            vacuum_task,
-            hummock_meta_client.clone(),
-        )
-        .await
-        {
-            Ok(_) => {
-                tracing::info!("Finish vacuuming SSTs");
-            }
-            Err(e) => {
-                tracing::warn!("Failed to vacuum SSTs. {:#?}", e);
-            }
-        }
-    }
-
     /// The background compaction thread that receives compaction tasks from hummock compaction
     /// manager and runs compaction tasks.
     pub fn start_compactor(
@@ -894,10 +870,10 @@ impl Compactor {
                         Compactor::compact(compactor_context, compact_task).await;
                     }
                     Task::VacuumTask(vacuum_task) => {
-                        Compactor::vacuum(vacuum_task, sstable_store, hummock_meta_client).await;
+                        Vacuum::vacuum(vacuum_task, sstable_store, hummock_meta_client).await;
                     }
-                    Task::FullScanTask(_) => {
-                        // TODO
+                    Task::FullScanTask(full_scan_task) => {
+                        Vacuum::full_scan(full_scan_task, sstable_store, hummock_meta_client).await;
                     }
                 }
             };
@@ -925,7 +901,7 @@ impl Compactor {
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "Subscribing to compaction tasks failed with error: {}. Will retry.",
+                            "Subscribing to compaction tasks failed with error: {:#?}. Will retry.",
                             e
                         );
                         continue 'start_stream;

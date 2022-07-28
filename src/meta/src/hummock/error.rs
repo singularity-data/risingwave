@@ -30,8 +30,6 @@ pub enum Error {
     MetaStoreError(anyhow::Error),
     #[error("compactor {0} is disconnected")]
     CompactorUnreachable(HummockContextId),
-    #[error("compactor {0} is busy")]
-    CompactorBusy(HummockContextId),
     #[error("compaction task {0} already assigned to compactor {1}")]
     CompactionTaskAlreadyAssigned(u64, HummockContextId),
     #[error("compaction group {0} not found")]
@@ -72,9 +70,6 @@ impl From<Error> for ErrorCode {
             }
             Error::MetaStoreError(err) => ErrorCode::MetaError(err.to_error_str()),
             Error::InternalError(err) => ErrorCode::InternalError(err),
-            Error::CompactorBusy(context_id) => {
-                ErrorCode::InternalError(format!("compactor {} is busy", context_id))
-            }
             Error::CompactorUnreachable(context_id) => {
                 ErrorCode::InternalError(format!("compactor {} is unreachable", context_id))
             }

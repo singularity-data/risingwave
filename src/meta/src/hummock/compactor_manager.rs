@@ -25,6 +25,8 @@ const STREAM_BUFFER_SIZE: usize = 4;
 
 pub type CompactorManagerRef = Arc<CompactorManager>;
 
+/// Wraps the stream between meta node and compactor node.
+/// Compactor node will re-establish the stream when the previous one fails.
 pub struct Compactor {
     context_id: HummockContextId,
     sender: Sender<Result<SubscribeCompactTasksResponse>>,
@@ -122,12 +124,12 @@ impl CompactorManager {
             context_id,
             sender: tx,
         }));
-        tracing::info!("Added compactor {}", context_id);
+        tracing::info!("Added compactor session {}", context_id);
         rx
     }
 
     pub fn remove_compactor(&self, context_id: HummockContextId) {
-        tracing::info!("Removed compactor {}", context_id);
+        tracing::info!("Removed compactor session {}", context_id);
         self.inner
             .write()
             .compactors

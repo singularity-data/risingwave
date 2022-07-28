@@ -145,4 +145,8 @@ impl HummockMetaClient for MonitoredHummockMetaClient {
             .trigger_manual_compaction(compaction_group_id, table_id, level)
             .await
     }
+
+    async fn report_full_scan_task(&self, sst_ids: Vec<HummockSstableId>) -> Result<()> {
+        self.meta_client.report_full_scan_task(sst_ids).await
+    }
 }

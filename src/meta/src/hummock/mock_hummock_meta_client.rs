@@ -165,6 +165,13 @@ impl HummockMetaClient for MockHummockMetaClient {
     ) -> Result<()> {
         todo!()
     }
+
+    async fn report_full_scan_task(&self, sst_ids: Vec<HummockSstableId>) -> Result<()> {
+        self.hummock_manager
+            .extend_ssts_to_delete_from_scan(&sst_ids)
+            .await;
+        Ok(())
+    }
 }
 
 impl MockHummockMetaClient {

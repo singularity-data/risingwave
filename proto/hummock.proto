@@ -252,7 +252,7 @@ message VacuumTask {
 
 // Scan object store to get candidate orphan SSTs.
 message FullScanTask {
-  uint64 timestamp_watermark = 1;
+  uint64 sst_retention_time_sec = 1;
 }
 
 message ReportVacuumTaskRequest {
@@ -281,6 +281,14 @@ message TriggerManualCompactionResponse {
   common.Status status = 1;
 }
 
+message ReportFullScanTaskRequest {
+  repeated uint64 sst_ids = 1;
+}
+
+message ReportFullScanTaskResponse {
+  common.Status status = 1;
+}
+
 service HummockManagerService {
   rpc PinVersion(PinVersionRequest) returns (PinVersionResponse);
   rpc UnpinVersion(UnpinVersionRequest) returns (UnpinVersionResponse);
@@ -295,6 +303,7 @@ service HummockManagerService {
   rpc ReportVacuumTask(ReportVacuumTaskRequest) returns (ReportVacuumTaskResponse);
   rpc GetCompactionGroups(GetCompactionGroupsRequest) returns (GetCompactionGroupsResponse);
   rpc TriggerManualCompaction(TriggerManualCompactionRequest) returns (TriggerManualCompactionResponse);
+  rpc ReportFullScanTask(ReportFullScanTaskRequest) returns (ReportFullScanTaskResponse);
 }
 
 service CompactorService {}

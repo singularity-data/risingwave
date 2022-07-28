@@ -51,4 +51,5 @@ pub trait HummockMetaClient: Send + Sync + 'static {
         table_id: u32,
         level: u32,
     ) -> Result<()>;
+    async fn report_full_scan_task(&self, sst_ids: Vec<HummockSstableId>) -> Result<()>;
 }

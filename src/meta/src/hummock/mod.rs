@@ -61,7 +61,8 @@ where
 {
     vec![
         start_compaction_scheduler(compaction_scheduler),
-        start_vacuum_scheduler(vacuum_trigger),
+        start_vacuum_scheduler(vacuum_trigger.clone()),
+        start_full_gc_scheduler(vacuum_trigger),
         subscribe_cluster_membership_change(
             hummock_manager,
             compactor_manager,
@@ -149,6 +150,7 @@ where
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
     let join_handle = tokio::spawn(async move {
         let mut min_trigger_interval = tokio::time::interval(VACUUM_TRIGGER_INTERVAL);
+        min_trigger_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 // Wait for interval
@@ -160,11 +162,39 @@ where
                 }
             }
             if let Err(err) = vacuum.vacuum_version_metadata().await {
-                tracing::warn!("Vacuum tracked data error {}", err);
+                tracing::warn!("Vacuum metadata error {:#?}", err);
             }
             // vacuum_orphan_data can be invoked less frequently.
             if let Err(err) = vacuum.vacuum_sst_data().await {
-                tracing::warn!("Vacuum SST data error {}", err);
+                tracing::warn!("Vacuum SST error {:#?}", err);
+            }
+        }
+    });
+    (join_handle, shutdown_tx)
+}
+
+const FULL_GC_INTERVAL: Duration = Duration::from_secs(3600 * 24);
+const SST_RETENTION_TIME: Duration = Duration::from_secs(3600 * 24 * 3);
+
+pub fn start_full_gc_scheduler<S>(vacuum: Arc<VacuumTrigger<S>>) -> (JoinHandle<()>, Sender<()>)
+where
+    S: MetaStore,
+{
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+    let join_handle = tokio::spawn(async move {
+        let mut min_trigger_interval = tokio::time::interval(FULL_GC_INTERVAL);
+        min_trigger_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        min_trigger_interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = min_trigger_interval.tick() => {},
+                _ = &mut shutdown_rx => {
+                    tracing::info!("Full GC scheduler is stopped");
+                    return;
+                }
+            }
+            if let Err(err) = vacuum.run_full_gc(SST_RETENTION_TIME).await {
+                tracing::warn!("Full GC error {:#?}", err);
             }
         }
     });

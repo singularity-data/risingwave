@@ -76,6 +76,7 @@ pub struct BlockLocation {
     pub size: usize,
 }
 
+#[derive(Clone)]
 pub struct ObjectMetadata {
     pub key: String,
     // Seconds since unix epoch.

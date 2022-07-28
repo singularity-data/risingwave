@@ -14,17 +14,17 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use itertools::Itertools;
-use risingwave_common::error::Result;
 use risingwave_hummock_sdk::HummockSstableId;
 use risingwave_pb::hummock::subscribe_compact_tasks_response::Task;
-use risingwave_pb::hummock::VacuumTask;
+use risingwave_pb::hummock::{FullScanTask, VacuumTask};
 
+use crate::hummock::error::{Error, Result};
 use crate::hummock::{CompactorManager, HummockManagerRef};
 use crate::storage::MetaStore;
 
-// TODO #4037: GC orphan SSTs in object store
 pub struct VacuumTrigger<S: MetaStore> {
     hummock_manager: HummockManagerRef<S>,
     /// Use the CompactorManager to dispatch VacuumTask.
@@ -164,6 +164,27 @@ where
         }
         tracing::info!("Finish vacuuming SSTs {:?}", vacuum_task.sstable_ids);
         Ok(())
+    }
+
+    /// Runs a full GC.
+    /// 1. Meta node sends a `FullScanTask` to a compactor in this method.
+    /// 2. The compactor returns scan result of object store to meta node. See
+    /// `Vacuum::full_scan_inner` in storage crate. 3. Meta node decides which SSTs to delete.
+    /// See `HummockManager::extend_ssts_to_delete_from_scan`.
+    pub async fn run_full_gc(&self, sst_retention_time: Duration) -> Result<()> {
+        let compactor = match self.compactor_manager.next_compactor() {
+            None => {
+                tracing::warn!("Try full GC but no available worker.");
+                return Ok(());
+            }
+            Some(compactor) => compactor,
+        };
+        compactor
+            .send_task(Task::FullScanTask(FullScanTask {
+                sst_retention_time_sec: sst_retention_time.as_secs(),
+            }))
+            .await
+            .map_err(|_| Error::CompactorUnreachable(compactor.context_id()))
     }
 }
 
