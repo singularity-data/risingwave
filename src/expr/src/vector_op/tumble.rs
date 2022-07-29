@@ -15,7 +15,7 @@
 use chrono::NaiveDateTime;
 use risingwave_common::types::{IntervalUnit, NaiveDateTimeWrapper, NaiveDateWrapper};
 
-use super::cast::date_to_timestamp;
+use super::cast::general_cast;
 use crate::{ExprError, Result};
 
 #[inline(always)]
@@ -23,7 +23,7 @@ pub fn tumble_start_date(
     time: NaiveDateWrapper,
     window: IntervalUnit,
 ) -> Result<NaiveDateTimeWrapper> {
-    tumble_start_date_time(date_to_timestamp(time)?, window)
+    tumble_start_date_time(general_cast(time)?, window)
 }
 
 // FIXME: This implementation is very crude and likely wrong. fix it later.
