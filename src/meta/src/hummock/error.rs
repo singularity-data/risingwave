@@ -14,7 +14,7 @@
 
 use risingwave_common::error::{ErrorCode, ToErrorStr};
 use risingwave_hummock_sdk::compaction_group::StateTableId;
-use risingwave_hummock_sdk::{CompactionGroupId, HummockContextId};
+use risingwave_hummock_sdk::{CompactionGroupId, HummockContextId, HummockSstableId};
 use thiserror::Error;
 
 use crate::model::MetadataModelError;
@@ -38,6 +38,8 @@ pub enum Error {
     InvalidCompactionGroup(CompactionGroupId),
     #[error("compaction group member {0} not found")]
     InvalidCompactionGroupMember(StateTableId),
+    #[error("SST {0} is invalid")]
+    InvalidSst(HummockSstableId),
     #[error("internal error: {0}")]
     InternalError(String),
 }
@@ -87,8 +89,11 @@ impl From<Error> for ErrorCode {
             Error::InvalidCompactionGroup(group_id) => {
                 ErrorCode::InternalError(format!("invalid compaction group {}", group_id))
             }
-            Error::InvalidCompactionGroupMember(prefix) => {
-                ErrorCode::InternalError(format!("invalid compaction group member {}", prefix))
+            Error::InvalidCompactionGroupMember(table_id) => {
+                ErrorCode::InternalError(format!("invalid compaction group member {}", table_id))
+            }
+            Error::InvalidSst(sst_id) => {
+                ErrorCode::InternalError(format!("SST {} is invalid", sst_id))
             }
         }
     }

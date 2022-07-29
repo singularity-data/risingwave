@@ -128,7 +128,7 @@ impl HummockMetaClient for MockHummockMetaClient {
 
     async fn report_compaction_task(&self, compact_task: CompactTask) -> Result<()> {
         self.hummock_manager
-            .report_compact_task(&compact_task)
+            .report_compact_task(self.context_id, &compact_task)
             .await
             .map(|_| ())
             .map_err(mock_err)
@@ -139,8 +139,12 @@ impl HummockMetaClient for MockHummockMetaClient {
         epoch: HummockEpoch,
         sstables: Vec<LocalSstableInfo>,
     ) -> Result<()> {
+        let sst_to_worker = sstables
+            .iter()
+            .map(|(_, sst)| (sst.id, self.context_id))
+            .collect();
         self.hummock_manager
-            .commit_epoch(epoch, sstables)
+            .commit_epoch(epoch, sstables, sst_to_worker)
             .await
             .map_err(mock_err)
     }

@@ -25,7 +25,7 @@ use risingwave_hummock_sdk::{
 use risingwave_pb::common::{HostAddress, WorkerNode, WorkerType};
 use risingwave_pb::hummock::{HummockVersion, KeyRange, SstableInfo};
 
-use crate::cluster::{ClusterManager, ClusterManagerRef};
+use crate::cluster::{ClusterManager, ClusterManagerRef, META_NODE_ID};
 use crate::hummock::compaction::compaction_config::CompactionConfigBuilder;
 use crate::hummock::compaction_group::manager::{
     CompactionGroupManager, CompactionGroupManagerRef,
@@ -63,8 +63,10 @@ where
         StaticCompactionGroupId::StateDefault.into(),
     )
     .await;
+    let ssts = to_local_sstable_info(&test_tables);
+    let sst_to_worker = ssts.iter().map(|(_, sst)| (sst.id, context_id)).collect();
     hummock_manager
-        .commit_epoch(epoch, to_local_sstable_info(&test_tables))
+        .commit_epoch(epoch, ssts, sst_to_worker)
         .await
         .unwrap();
     // Current state: {v0: [], v1: [test_tables]}
@@ -92,7 +94,7 @@ where
     compact_task.sorted_output_ssts = test_tables_2.clone();
     compact_task.task_status = true;
     hummock_manager
-        .report_compact_task(&compact_task)
+        .report_compact_task(context_id, &compact_task)
         .await
         .unwrap();
     // Current state: {v0: [], v1: [test_tables], v2: [test_tables_2, test_tables to_delete]}
@@ -109,8 +111,10 @@ where
         StaticCompactionGroupId::StateDefault.into(),
     )
     .await;
+    let ssts = to_local_sstable_info(&test_tables_3);
+    let sst_to_worker = ssts.iter().map(|(_, sst)| (sst.id, context_id)).collect();
     hummock_manager
-        .commit_epoch(epoch, to_local_sstable_info(&test_tables_3))
+        .commit_epoch(epoch, ssts, sst_to_worker)
         .await
         .unwrap();
     // Current state: {v0: [], v1: [test_tables], v2: [test_tables_2, to_delete:test_tables], v3:
@@ -277,4 +281,18 @@ where
         ret.push(hummock_manager.get_new_table_id().await.unwrap());
     }
     ret
+}
+
+pub async fn commit_from_meta_node<S>(
+    hummock_manager_ref: &HummockManager<S>,
+    epoch: HummockEpoch,
+    ssts: Vec<LocalSstableInfo>,
+) -> crate::hummock::error::Result<()>
+where
+    S: MetaStore,
+{
+    let sst_to_worker = ssts.iter().map(|(_, sst)| (sst.id, META_NODE_ID)).collect();
+    hummock_manager_ref
+        .commit_epoch(epoch, ssts, sst_to_worker)
+        .await
 }

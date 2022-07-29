@@ -168,6 +168,7 @@ impl StreamService for StreamServiceImpl {
                     sst: Some(sst),
                 })
                 .collect_vec(),
+            worker_id: self.env.worker_id(),
         }))
     }
 

@@ -26,7 +26,7 @@ use prometheus::HistogramTimer;
 use risingwave_common::catalog::TableId;
 use risingwave_common::error::{ErrorCode, Result, RwError};
 use risingwave_common::util::epoch::{Epoch, INVALID_EPOCH};
-use risingwave_hummock_sdk::LocalSstableInfo;
+use risingwave_hummock_sdk::{HummockSstableId, LocalSstableInfo};
 use risingwave_pb::common::worker_node::State::Running;
 use risingwave_pb::common::WorkerType;
 use risingwave_pb::meta::table_fragments::ActorState;
@@ -47,7 +47,7 @@ use self::info::BarrierActorInfo;
 use self::notifier::Notifier;
 use crate::barrier::progress::CreateMviewProgressTracker;
 use crate::barrier::BarrierEpochState::{Complete, InFlight};
-use crate::cluster::{ClusterManagerRef, META_NODE_ID};
+use crate::cluster::{ClusterManagerRef, WorkerId, META_NODE_ID};
 use crate::hummock::HummockManagerRef;
 use crate::manager::{CatalogManagerRef, MetaSrvEnv};
 use crate::model::{ActorId, BarrierManagerState};
@@ -780,18 +780,23 @@ where
                     // We must ensure all epochs are committed in ascending order,
                     // because the storage engine will
                     // query from new to old in the order in which the L0 layer files are generated. see https://github.com/singularity-data/risingwave/issues/1251
-                    let synced_ssts: Vec<LocalSstableInfo> = resps
-                        .iter()
-                        .flat_map(|resp| resp.sycned_sstables.clone())
-                        .map(|grouped| {
-                            (
-                                grouped.compaction_group_id,
-                                grouped.sst.expect("field not None"),
-                            )
-                        })
-                        .collect_vec();
+                    let mut sst_to_worker: HashMap<HummockSstableId, WorkerId> = HashMap::new();
+                    let mut synced_ssts: Vec<LocalSstableInfo> = vec![];
+                    for resp in resps {
+                        let mut t: Vec<LocalSstableInfo> = resp
+                            .sycned_sstables
+                            .iter()
+                            .cloned()
+                            .map(|grouped| {
+                                let sst = grouped.sst.expect("field not None");
+                                sst_to_worker.insert(sst.id, resp.worker_id);
+                                (grouped.compaction_group_id, sst)
+                            })
+                            .collect_vec();
+                        synced_ssts.append(&mut t);
+                    }
                     self.hummock_manager
-                        .commit_epoch(node.command_ctx.prev_epoch.0, synced_ssts)
+                        .commit_epoch(node.command_ctx.prev_epoch.0, synced_ssts, sst_to_worker)
                         .await?;
                 }
                 Err(err) => {

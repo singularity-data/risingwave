@@ -14,7 +14,7 @@
 
 use std::borrow::{Borrow, BorrowMut};
 use std::cmp;
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::ops::Bound::{Excluded, Included};
 use std::ops::{DerefMut, RangeBounds};
@@ -819,8 +819,13 @@ where
         Ok(())
     }
 
-    pub async fn report_compact_task(&self, compact_task: &CompactTask) -> Result<bool> {
-        self.report_compact_task_impl(compact_task, false).await
+    pub async fn report_compact_task(
+        &self,
+        context_id: HummockContextId,
+        compact_task: &CompactTask,
+    ) -> Result<bool> {
+        self.report_compact_task_impl(context_id, compact_task, false)
+            .await
     }
 
     /// `report_compact_task` is retryable. `task_id` in `compact_task` parameter is used as the
@@ -829,6 +834,7 @@ where
     #[named]
     pub async fn report_compact_task_impl(
         &self,
+        context_id: HummockContextId,
         compact_task: &CompactTask,
         trivial_move: bool,
     ) -> Result<bool> {
@@ -850,6 +856,16 @@ where
             .map(|assignment| assignment.context_id);
         // The task is not found.
         if assignee_context_id.is_none() && !trivial_move {
+            tracing::warn!("Compaction task {} not found", compact_task.task_id);
+            return Ok(false);
+        }
+        if *assignee_context_id.as_ref().unwrap() != context_id {
+            tracing::warn!(
+                "Wrong reporter {}. Compaction task {} is assigned to {}",
+                context_id,
+                compact_task.task_id,
+                *assignee_context_id.as_ref().unwrap(),
+            );
             return Ok(false);
         }
         compact_status.report_compact_task(compact_task);
@@ -956,6 +972,7 @@ where
         &self,
         epoch: HummockEpoch,
         sstables: Vec<LocalSstableInfo>,
+        sst_to_context: HashMap<HummockSstableId, HummockContextId>,
     ) -> Result<()> {
         // Warn of table_ids that is not found in expected compaction group.
         // It indicates:
@@ -985,6 +1002,24 @@ where
 
         let mut versioning_guard = write_lock!(self, versioning).await;
         let _timer = start_measure_real_process_timer!(self);
+
+        for (sst_id, context_id) in &sst_to_context {
+            #[cfg(test)]
+            {
+                if *context_id == META_NODE_ID {
+                    continue;
+                }
+            }
+            if self
+                .cluster_manager
+                .get_worker_by_id(*context_id)
+                .await
+                .is_none()
+            {
+                return Err(Error::InvalidSst(*sst_id));
+            }
+        }
+
         let old_version = versioning_guard.current_version.clone();
         let new_version_id = old_version.id + 1;
         let versioning = versioning_guard.deref_mut();

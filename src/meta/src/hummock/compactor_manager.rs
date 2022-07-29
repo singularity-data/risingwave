@@ -150,8 +150,8 @@ mod tests {
     use tokio::sync::mpsc::error::TryRecvError;
 
     use crate::hummock::test_utils::{
-        generate_test_tables, register_sstable_infos_to_compaction_group, setup_compute_env,
-        to_local_sstable_info,
+        commit_from_meta_node, generate_test_tables, register_sstable_infos_to_compaction_group,
+        setup_compute_env, to_local_sstable_info,
     };
     use crate::hummock::{CompactorManager, HummockManager};
     use crate::storage::MetaStore;
@@ -173,10 +173,13 @@ mod tests {
             StaticCompactionGroupId::StateDefault.into(),
         )
         .await;
-        hummock_manager_ref
-            .commit_epoch(epoch, to_local_sstable_info(&original_tables))
-            .await
-            .unwrap();
+        commit_from_meta_node(
+            hummock_manager_ref,
+            epoch,
+            to_local_sstable_info(&original_tables),
+        )
+        .await
+        .unwrap();
     }
 
     fn dummy_compact_task(task_id: u64) -> CompactTask {

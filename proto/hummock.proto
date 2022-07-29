@@ -210,7 +210,8 @@ message GetCompactionTasksResponse {
 }
 
 message ReportCompactionTasksRequest {
-  CompactTask compact_task = 1;
+  uint32 context_id = 1;
+  CompactTask compact_task = 2;
 }
 
 message ReportCompactionTasksResponse {

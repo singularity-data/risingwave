@@ -22,6 +22,7 @@ use risingwave_hummock_sdk::CompactionGroupId;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot::Receiver;
 
+use crate::cluster::META_NODE_ID;
 use crate::hummock::compaction::CompactStatus;
 use crate::hummock::error::Error;
 use crate::hummock::{CompactorManagerRef, HummockManagerRef};
@@ -147,7 +148,7 @@ where
             compact_task.sorted_output_ssts = compact_task.input_ssts[0].table_infos.clone();
             return self
                 .hummock_manager
-                .report_compact_task_impl(&compact_task, true)
+                .report_compact_task_impl(META_NODE_ID, &compact_task, true)
                 .await
                 .is_ok();
         }
