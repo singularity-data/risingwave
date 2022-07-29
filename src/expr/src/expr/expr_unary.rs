@@ -129,7 +129,8 @@ macro_rules! gen_cast {
             { decimal, float32, to_f32 },
             { decimal, float64, to_f64 },
 
-            { date, timestamp, general_cast }
+            { date, timestamp, general_cast },
+            { time, interval, general_cast }
         }
     };
 }
