@@ -157,8 +157,17 @@ impl LocalStreamManager {
         actor_ids_to_collect: impl IntoIterator<Item = ActorId>,
     ) -> Result<()> {
         let core = self.core.lock();
+        let timer = core
+            .streaming_metrics
+            .barrier_inflight_latency
+            .start_timer();
         let mut barrier_manager = core.context.lock_barrier_manager();
-        barrier_manager.send_barrier(barrier, actor_ids_to_send, actor_ids_to_collect)?;
+        barrier_manager.send_barrier(
+            barrier,
+            actor_ids_to_send,
+            actor_ids_to_collect,
+            Some(timer),
+        )?;
         Ok(())
     }
 
@@ -172,17 +181,25 @@ impl LocalStreamManager {
     /// Use `epoch` to find collect rx. And wait for all actor to be collected before
     /// returning.
     pub async fn collect_barrier(&self, epoch: u64) -> CollectResult {
-        let rx = {
+        let (rx, timer) = {
             let core = self.core.lock();
             let mut barrier_manager = core.context.lock_barrier_manager();
             barrier_manager.remove_collect_rx(epoch)
         };
         // Wait for all actors finishing this barrier.
-        rx.await.unwrap()
+        let result = rx.expect("no rx for local mode").await.unwrap();
+        timer.expect("no timer for test").observe_duration();
+        result
     }
 
     pub async fn sync_epoch(&self, epoch: u64) -> Vec<LocalSstableInfo> {
-        dispatch_state_store!(self.state_store(), store, {
+        let timer = self
+            .core
+            .lock()
+            .streaming_metrics
+            .barrier_sync_latency
+            .start_timer();
+        let local_sst_info = dispatch_state_store!(self.state_store(), store, {
             match store.sync(Some(epoch)).await {
                 Ok(_) => store.get_uncommitted_ssts(epoch),
                 // TODO: Handle sync failure by propagating it back to global barrier manager
@@ -191,7 +208,9 @@ impl LocalStreamManager {
                     epoch, e
                 ),
             }
-        })
+        });
+        timer.observe_duration();
+        local_sst_info
     }
 
     pub async fn clear_storage_buffer(&self) {
@@ -209,7 +228,11 @@ impl LocalStreamManager {
         let core = self.core.lock();
         let mut barrier_manager = core.context.lock_barrier_manager();
         assert!(barrier_manager.is_local_mode());
-        barrier_manager.send_barrier(barrier, empty(), empty())?;
+        let timer = core
+            .streaming_metrics
+            .barrier_inflight_latency
+            .start_timer();
+        barrier_manager.send_barrier(barrier, empty(), empty(), Some(timer))?;
         barrier_manager.remove_collect_rx(barrier.epoch.prev);
         Ok(())
     }

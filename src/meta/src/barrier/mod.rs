@@ -221,19 +221,22 @@ struct CheckpointControl<S: MetaStore> {
     adding_actors: HashSet<ActorId>,
     /// The barrier does not send or collect these actors, even if they are `Running`.
     removing_actors: HashSet<ActorId>,
+
+    metrics: Arc<MetaMetrics>,
 }
 
 impl<S> CheckpointControl<S>
 where
     S: MetaStore,
 {
-    fn new() -> Self {
+    fn new(metrics: Arc<MetaMetrics>) -> Self {
         Self {
             command_ctx_queue: Default::default(),
             creating_tables: Default::default(),
             dropping_tables: Default::default(),
             adding_actors: Default::default(),
             removing_actors: Default::default(),
+            metrics,
         }
     }
 
@@ -314,26 +317,25 @@ where
         }
     }
 
-    /// Return the nums of barrier (the nums of in-flight-barrier, the nums of all-barrier).
-    fn get_barrier_len(&self) -> (usize, usize) {
-        (
+    /// Update the metrics of barrier nums.
+    fn update_barrier_nums_metrics(&self) {
+        self.metrics.in_flight_barrier_nums.set(
             self.command_ctx_queue
                 .iter()
                 .filter(|x| matches!(x.state, InFlight))
-                .count(),
-            self.command_ctx_queue.len(),
-        )
+                .count() as i64,
+        );
+        self.metrics
+            .all_barrier_nums
+            .set(self.command_ctx_queue.len() as i64);
     }
 
     /// Inject a `command_ctx` in `command_ctx_queue`, and its state is `InFlight`.
-    fn inject(
-        &mut self,
-        command_ctx: Arc<CommandContext<S>>,
-        notifiers: SmallVec<[Notifier; 1]>,
-        timer: HistogramTimer,
-    ) {
+    fn inject(&mut self, command_ctx: Arc<CommandContext<S>>, notifiers: SmallVec<[Notifier; 1]>) {
+        let timer = self.metrics.barrier_latency.start_timer();
         self.command_ctx_queue.push_back(EpochNode {
             timer: Some(timer),
+            wait_commit_timer: None,
             result: None,
             state: InFlight,
             command_ctx,
@@ -349,6 +351,7 @@ where
         result: Result<Vec<BarrierCompleteResponse>>,
     ) -> Vec<EpochNode<S>> {
         // change state to complete, and wait for nodes with the smaller epoch to commit
+        let wait_commit_timer = self.metrics.barrier_wait_commit_latency.start_timer();
         if let Some(node) = self
             .command_ctx_queue
             .iter_mut()
@@ -357,6 +360,7 @@ where
             assert!(matches!(node.state, InFlight));
             node.state = Complete;
             node.result = Some(result);
+            node.wait_commit_timer = Some(wait_commit_timer);
         };
         // Find all continuous nodes with 'Complete' starting from first node
         let index = self
@@ -413,7 +417,10 @@ where
 
 /// The state and message of this barrier, a node for concurrent checkpoint.
 pub struct EpochNode<S: MetaStore> {
+    /// The timer of `barrier_latency`
     timer: Option<HistogramTimer>,
+    /// The timer of `barrier_wait_commit_latency`
+    wait_commit_timer: Option<HistogramTimer>,
     result: Option<Result<Vec<BarrierCompleteResponse>>>,
     state: BarrierEpochState,
     command_ctx: Arc<CommandContext<S>>,
@@ -515,7 +522,7 @@ where
         min_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut barrier_timer: Option<HistogramTimer> = None;
         let (barrier_complete_tx, mut barrier_complete_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut checkpoint_control = CheckpointControl::new();
+        let mut checkpoint_control = CheckpointControl::new(self.metrics.clone());
         loop {
             tokio::select! {
                 biased;
@@ -525,11 +532,7 @@ where
                     return;
                 }
                 result = barrier_complete_rx.recv() => {
-                    let (in_flight_nums, all_nums) = checkpoint_control.get_barrier_len();
-                    self.metrics
-                        .in_flight_barrier_nums
-                        .set(in_flight_nums as i64);
-                    self.metrics.all_barrier_nums.set(all_nums as i64);
+                    checkpoint_control.update_barrier_nums_metrics();
 
                     let (prev_epoch, result) = result.unwrap();
                     self.barrier_complete_and_commit(
@@ -589,8 +592,7 @@ where
             ));
             let mut notifiers = notifiers;
             notifiers.iter_mut().for_each(Notifier::notify_to_send);
-            let timer = self.metrics.barrier_latency.start_timer();
-            checkpoint_control.inject(command_ctx.clone(), notifiers, timer);
+            checkpoint_control.inject(command_ctx.clone(), notifiers);
 
             self.inject_and_send_err(command_ctx, barrier_complete_tx.clone())
                 .await;
@@ -743,6 +745,9 @@ where
                 if let Some(timer) = node.timer {
                     timer.observe_duration();
                 }
+                if let Some(wait_commit_timer) = node.wait_commit_timer {
+                    wait_commit_timer.observe_duration();
+                }
                 node.notifiers
                     .into_iter()
                     .for_each(|notifier| notifier.notify_collection_failed(err.clone()));
@@ -806,6 +811,7 @@ where
         }
 
         node.timer.take().unwrap().observe_duration();
+        node.wait_commit_timer.take().unwrap().observe_duration();
         let responses = node.result.take().unwrap()?;
         node.command_ctx.post_collect().await?;
 

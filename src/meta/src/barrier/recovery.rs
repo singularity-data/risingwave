@@ -62,8 +62,11 @@ where
     }
 
     async fn resolve_actor_info_for_recovery(&self) -> BarrierActorInfo {
-        self.resolve_actor_info(&mut CheckpointControl::new(), &Command::checkpoint())
-            .await
+        self.resolve_actor_info(
+            &mut CheckpointControl::new(self.metrics.clone()),
+            &Command::checkpoint(),
+        )
+        .await
     }
 
     /// Recovery the whole cluster from the latest epoch.

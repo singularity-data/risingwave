@@ -454,7 +454,7 @@ impl LocalVersionManager {
         Some((epoch, join_handle))
     }
 
-    pub async fn sync_shared_buffer(&self, epoch: Option<HummockEpoch>) -> HummockResult<()> {
+    pub async fn sync_shared_buffer(&self, epoch: Option<HummockEpoch>) -> HummockResult<usize> {
         let epochs = match epoch {
             Some(epoch) => vec![epoch],
             None => self
@@ -464,13 +464,14 @@ impl LocalVersionManager {
                 .map(|(epoch, _)| *epoch)
                 .collect(),
         };
+        let mut size = 0;
         for epoch in epochs {
-            self.sync_shared_buffer_epoch(epoch).await?;
+            size += self.sync_shared_buffer_epoch(epoch).await?
         }
-        Ok(())
+        Ok(size)
     }
 
-    pub async fn sync_shared_buffer_epoch(&self, epoch: HummockEpoch) -> HummockResult<()> {
+    pub async fn sync_shared_buffer_epoch(&self, epoch: HummockEpoch) -> HummockResult<usize> {
         tracing::trace!("sync epoch {}", epoch);
         let (tx, rx) = oneshot::channel();
         self.buffer_tracker
@@ -488,13 +489,12 @@ impl LocalVersionManager {
             Some(task) => task,
             None => {
                 tracing::trace!("sync epoch {} has no more task to do", epoch);
-                return Ok(());
+                return Ok(0);
             }
         };
 
-        let ret = self
-            .run_upload_task(order_index, epoch, task_payload, false)
-            .await;
+        self.run_upload_task(order_index, epoch, task_payload, false)
+            .await?;
         tracing::trace!(
             "sync epoch {} finished. Task size {}",
             epoch,
@@ -505,7 +505,7 @@ impl LocalVersionManager {
         }
         self.buffer_tracker
             .send_event(SharedBufferEvent::EpochSynced(epoch));
-        ret
+        Ok(task_write_batch_size)
     }
 
     async fn run_upload_task(

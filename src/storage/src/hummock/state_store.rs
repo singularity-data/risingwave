@@ -479,10 +479,11 @@ impl StateStore for HummockStorage {
 
     fn sync(&self, epoch: Option<u64>) -> Self::SyncFuture<'_> {
         async move {
-            self.local_version_manager()
+            let size = self
+                .local_version_manager()
                 .sync_shared_buffer(epoch)
                 .await?;
-            Ok(())
+            Ok(size)
         }
     }
 

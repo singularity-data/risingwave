@@ -235,7 +235,7 @@ impl StateStore for MemoryStateStore {
     fn sync(&self, _epoch: Option<u64>) -> Self::SyncFuture<'_> {
         async move {
             // memory backend doesn't support push to S3, so this is a no-op
-            Ok(())
+            Ok(0)
         }
     }
 

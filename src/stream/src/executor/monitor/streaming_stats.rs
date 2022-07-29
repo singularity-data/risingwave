@@ -15,8 +15,9 @@
 use prometheus::core::{AtomicF64, AtomicI64, AtomicU64, GenericCounterVec, GenericGaugeVec};
 use prometheus::{
     exponential_buckets, histogram_opts, register_gauge_vec_with_registry,
-    register_histogram_vec_with_registry, register_int_counter_vec_with_registry,
-    register_int_gauge_vec_with_registry, HistogramVec, Registry,
+    register_histogram_vec_with_registry, register_histogram_with_registry,
+    register_int_counter_vec_with_registry, register_int_gauge_vec_with_registry, Histogram,
+    HistogramVec, Registry,
 };
 
 pub struct StreamingMetrics {
@@ -45,6 +46,12 @@ pub struct StreamingMetrics {
     pub join_lookup_miss_count: GenericCounterVec<AtomicU64>,
     pub join_total_lookup_count: GenericCounterVec<AtomicU64>,
     pub join_barrier_align_duration: HistogramVec,
+    /// The duration from receipt of barrier to all actors collection.
+    /// And the max of all node `barrier_inflight_latency` is the latency for a barrier
+    /// to flow through the graph.
+    pub barrier_inflight_latency: Histogram,
+    /// The duration of sync to storage.
+    pub barrier_sync_latency: Histogram,
 }
 
 impl StreamingMetrics {
@@ -242,6 +249,20 @@ impl StreamingMetrics {
             register_histogram_vec_with_registry!(opts, &["actor_id", "wait_side"], registry)
                 .unwrap();
 
+        let opts = histogram_opts!(
+            "stream_barrier_inflight_duration_seconds",
+            "barrier_inflight_latency",
+            exponential_buckets(0.1, 1.5, 16).unwrap() // max 43s
+        );
+        let barrier_inflight_latency = register_histogram_with_registry!(opts, registry).unwrap();
+
+        let opts = histogram_opts!(
+            "stream_barrier_sync_storage_duration_seconds",
+            "barrier_sync_latency",
+            exponential_buckets(0.1, 1.5, 16).unwrap() // max 43s
+        );
+        let barrier_sync_latency = register_histogram_with_registry!(opts, registry).unwrap();
+
         Self {
             registry,
             executor_row_count,
@@ -268,6 +289,8 @@ impl StreamingMetrics {
             join_lookup_miss_count,
             join_total_lookup_count,
             join_barrier_align_duration,
+            barrier_inflight_latency,
+            barrier_sync_latency,
         }
     }
 

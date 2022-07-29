@@ -383,6 +383,34 @@ def section_streaming(panels):
                     "rate(meta_barrier_duration_seconds_sum[$__rate_interval]) / rate(meta_barrier_duration_seconds_count[$__rate_interval])", "barrier_latency_avg"
                 ),
             ]),
+        panels.timeseries_latency(
+            "Barrier In-Flight Latency",
+            quantile(lambda quantile, legend: panels.target(
+                f"histogram_quantile({quantile}, sum(rate(stream_barrier_inflight_duration_seconds_bucket[$__rate_interval])) by (le))", f"barrier_inflight_latency_p{legend}"
+            ), [50, 90, 99, 999, "max"]) + [
+                panels.target(
+                    "max(sum by(le, instance)(rate(stream_barrier_inflight_duration_seconds_sum[$__rate_interval]))  / sum by(le, instance)(rate(stream_barrier_inflight_duration_seconds_count[$__rate_interval])))", "barrier_inflight_latency_avg"
+                ),
+            ]),
+        panels.timeseries_latency(
+            "Barrier Sync Latency",
+
+            quantile(lambda quantile, legend: panels.target(
+                f"histogram_quantile({quantile}, sum(rate(stream_barrier_sync_storage_duration_seconds_bucket[$__rate_interval])) by (le,instance))", f"barrier_sync_latency_p{legend}"+" - computer @ {{instance}}"
+            ), [50, 90, 99, 999, "max"]) + [
+                panels.target(
+                    "sum by(le, instance)(rate(stream_barrier_sync_storage_duration_seconds_sum[$__rate_interval]))  / sum by(le, instance)(rate(stream_barrier_sync_storage_duration_seconds_count[$__rate_interval]))", "barrier_sync_latency_avg - computer @ {{instance}}"
+                ),
+            ]),
+        panels.timeseries_latency(
+            "Barrier Wait Commit Latency",
+            quantile(lambda quantile, legend: panels.target(
+                f"histogram_quantile({quantile}, sum(rate(meta_barrier_wait_commit_duration_seconds_bucket[$__rate_interval])) by (le))", f"barrier_wait_commit_latency_p{legend}"
+            ), [50, 90, 99, 999, "max"]) + [
+                panels.target(
+                    "rate(meta_barrier_wait_commit_duration_seconds_sum[$__rate_interval]) / rate(meta_barrier_wait_commit_duration_seconds_count[$__rate_interval])", "barrier_wait_commit_avg"
+                ),
+            ]),
         panels.timeseries_rowsps("Source Throughput", [
             panels.target(
                 "rate(stream_source_output_rows_counts[$__rate_interval])", "source={{source_id}} @ {{instance}}"
@@ -788,6 +816,11 @@ def section_hummock(panels):
             ),
             panels.target(
                 "sum(rate(state_store_shared_buffer_to_sstable_size_sum[$__rate_interval]))by(job,instance) / sum(rate(state_store_shared_buffer_to_sstable_size_count[$__rate_interval]))by(job,instance)", "sync - {{job}} @ {{instance}}"
+            ),
+        ]),
+        panels.timeseries_bytes("Checkpoint Sync Size", [
+            panels.target(
+                "sum by(le, job, instance) (rate(state_store_write_l0_size_per_epoch_sum[$__rate_interval])) / sum by(le, job, instance) (rate(state_store_write_l0_size_per_epoch_count[$__rate_interval]))", "avg - {{job}} @ {{instance}}"
             ),
         ]),
         panels.timeseries_bytes("Cache Size", [

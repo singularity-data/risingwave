@@ -14,10 +14,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use prometheus::HistogramTimer;
 use risingwave_common::error::Result;
 use risingwave_pb::stream_service::barrier_complete_response::CreateMviewProgress as ProstCreateMviewProgress;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
+use tokio::sync::oneshot::Receiver;
 
 use self::managed_state::ManagedBarrierState;
 use crate::executor::*;
@@ -66,7 +68,8 @@ pub struct LocalBarrierManager {
     state: BarrierState,
 
     /// Save collect rx
-    collect_complete_receiver: HashMap<u64, Option<oneshot::Receiver<CollectResult>>>,
+    collect_complete_receiver:
+        HashMap<u64, (Option<Receiver<CollectResult>>, Option<HistogramTimer>)>,
 }
 
 impl Default for LocalBarrierManager {
@@ -108,6 +111,7 @@ impl LocalBarrierManager {
         barrier: &Barrier,
         actor_ids_to_send: impl IntoIterator<Item = ActorId>,
         actor_ids_to_collect: impl IntoIterator<Item = ActorId>,
+        timer: Option<HistogramTimer>,
     ) -> Result<()> {
         let to_send = {
             let to_send: HashSet<ActorId> = actor_ids_to_send.into_iter().collect();
@@ -156,12 +160,15 @@ impl LocalBarrierManager {
         }
 
         self.collect_complete_receiver
-            .insert(barrier.epoch.prev, rx);
+            .insert(barrier.epoch.prev, (rx, timer));
         Ok(())
     }
 
     /// Use `prev_epoch` to remove collect rx and return rx.
-    pub fn remove_collect_rx(&mut self, prev_epoch: u64) -> oneshot::Receiver<CollectResult> {
+    pub fn remove_collect_rx(
+        &mut self,
+        prev_epoch: u64,
+    ) -> (Option<Receiver<CollectResult>>, Option<HistogramTimer>) {
         self.collect_complete_receiver
             .remove(&prev_epoch)
             .unwrap_or_else(|| {
@@ -170,7 +177,6 @@ impl LocalBarrierManager {
                     prev_epoch
                 )
             })
-            .expect("no rx for local mode")
     }
 
     /// remove all collect rx less than `prev_epoch`

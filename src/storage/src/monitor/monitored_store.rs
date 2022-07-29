@@ -227,12 +227,16 @@ where
     fn sync(&self, epoch: Option<u64>) -> Self::SyncFuture<'_> {
         async move {
             let timer = self.stats.shared_buffer_to_l0_duration.start_timer();
-            self.inner
+            let size = self
+                .inner
                 .sync(epoch)
                 .await
                 .inspect_err(|e| error!("Failed in sync: {:?}", e))?;
             timer.observe_duration();
-            Ok(())
+            if size != 0 {
+                self.stats.write_l0_size_per_epoch.observe(size as _);
+            }
+            Ok(size)
         }
     }
 
