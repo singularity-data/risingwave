@@ -24,13 +24,11 @@ clap = { version = "3", features = ["atty", "clap_derive", "color", "derive", "e
 criterion = { version = "0.3", features = ["async", "async_tokio", "cargo_bench_support", "futures", "tokio"] }
 crossbeam-deque = { version = "0.8", features = ["crossbeam-epoch", "crossbeam-utils", "std"] }
 crossbeam-epoch = { version = "0.9", features = ["alloc", "once_cell", "std"] }
-digest = { version = "0.10", features = ["alloc", "block-buffer", "core-api", "mac", "std", "subtle"] }
 either = { version = "1", features = ["use_std"] }
 fail = { version = "0.5", default-features = false, features = ["failpoints"] }
 fixedbitset = { version = "0.4", features = ["std"] }
 flate2 = { version = "1", features = ["any_zlib", "libz-sys", "miniz_oxide", "rust_backend", "zlib"] }
 frunk_core = { version = "0.4", default-features = false, features = ["std"] }
-futures = { version = "0.3", features = ["alloc", "async-await", "executor", "futures-executor", "std"] }
 futures-channel = { version = "0.3", features = ["alloc", "futures-sink", "sink", "std"] }
 futures-core = { version = "0.3", features = ["alloc", "std"] }
 futures-executor = { version = "0.3", features = ["std"] }
@@ -58,11 +56,13 @@ num-traits = { version = "0.2", features = ["i128", "std"] }
 parking_lot = { version = "0.12", features = ["arc_lock", "deadlock_detection"] }
 parking_lot_core = { version = "0.9", default-features = false, features = ["backtrace", "deadlock_detection", "petgraph", "thread-id"] }
 petgraph = { version = "0.6", features = ["graphmap", "matrix_graph", "stable_graph"] }
+postgres-types = { version = "0.2", default-features = false, features = ["chrono-04", "derive", "postgres-derive", "with-chrono-0_4"] }
 prometheus = { version = "0.13", features = ["libc", "process", "procfs", "protobuf"] }
 rand = { version = "0.8", features = ["alloc", "getrandom", "libc", "rand_chacha", "small_rng", "std", "std_rng"] }
 regex = { version = "1", features = ["aho-corasick", "memchr", "perf", "perf-cache", "perf-dfa", "perf-inline", "perf-literal", "std", "unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
 regex-automata = { version = "0.1", features = ["regex-syntax", "std"] }
 regex-syntax = { version = "0.6", features = ["unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
+rust_decimal = { version = "1", features = ["byteorder", "bytes", "db-tokio-postgres", "postgres", "serde", "std", "tokio-postgres"] }
 scopeguard = { version = "1", features = ["use_std"] }
 serde = { version = "1", features = ["alloc", "derive", "serde_derive", "std"] }
 serde_json = { version = "1", features = ["raw_value", "std"] }
@@ -93,13 +93,11 @@ clap = { version = "3", features = ["atty", "clap_derive", "color", "derive", "e
 criterion = { version = "0.3", features = ["async", "async_tokio", "cargo_bench_support", "futures", "tokio"] }
 crossbeam-deque = { version = "0.8", features = ["crossbeam-epoch", "crossbeam-utils", "std"] }
 crossbeam-epoch = { version = "0.9", features = ["alloc", "once_cell", "std"] }
-digest = { version = "0.10", features = ["alloc", "block-buffer", "core-api", "mac", "std", "subtle"] }
 either = { version = "1", features = ["use_std"] }
 fail = { version = "0.5", default-features = false, features = ["failpoints"] }
 fixedbitset = { version = "0.4", features = ["std"] }
 flate2 = { version = "1", features = ["any_zlib", "libz-sys", "miniz_oxide", "rust_backend", "zlib"] }
 frunk_core = { version = "0.4", default-features = false, features = ["std"] }
-futures = { version = "0.3", features = ["alloc", "async-await", "executor", "futures-executor", "std"] }
 futures-channel = { version = "0.3", features = ["alloc", "futures-sink", "sink", "std"] }
 futures-core = { version = "0.3", features = ["alloc", "std"] }
 futures-executor = { version = "0.3", features = ["std"] }
@@ -127,11 +125,13 @@ num-traits = { version = "0.2", features = ["i128", "std"] }
 parking_lot = { version = "0.12", features = ["arc_lock", "deadlock_detection"] }
 parking_lot_core = { version = "0.9", default-features = false, features = ["backtrace", "deadlock_detection", "petgraph", "thread-id"] }
 petgraph = { version = "0.6", features = ["graphmap", "matrix_graph", "stable_graph"] }
+postgres-types = { version = "0.2", default-features = false, features = ["chrono-04", "derive", "postgres-derive", "with-chrono-0_4"] }
 prometheus = { version = "0.13", features = ["libc", "process", "procfs", "protobuf"] }
 rand = { version = "0.8", features = ["alloc", "getrandom", "libc", "rand_chacha", "small_rng", "std", "std_rng"] }
 regex = { version = "1", features = ["aho-corasick", "memchr", "perf", "perf-cache", "perf-dfa", "perf-inline", "perf-literal", "std", "unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
 regex-automata = { version = "0.1", features = ["regex-syntax", "std"] }
 regex-syntax = { version = "0.6", features = ["unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
+rust_decimal = { version = "1", features = ["byteorder", "bytes", "db-tokio-postgres", "postgres", "serde", "std", "tokio-postgres"] }
 scopeguard = { version = "1", features = ["use_std"] }
 serde = { version = "1", features = ["alloc", "derive", "serde_derive", "std"] }
 serde_json = { version = "1", features = ["raw_value", "std"] }

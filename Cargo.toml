@@ -31,6 +31,7 @@ members = [
   "src/tests/simulation",
   "src/tests/sqlsmith",
   "src/utils/memcomparable",
+  "src/utils/pgtype-binary",
   "src/utils/pgwire",
   "src/utils/runtime",
   "src/utils/static-link",
