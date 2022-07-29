@@ -652,6 +652,41 @@ pub fn display_datum_ref(d: &DatumRef<'_>) -> String {
 }
 
 impl ScalarRefImpl<'_> {
+    /// Serializes the scalar to binary format.
+    pub fn binary_serialize(
+        &self,
+        ser: &mut pgtype_binary::Serializer,
+    ) -> pgtype_binary::Result<()> {
+        match self {
+            Self::Int64(v) => v.serialize(ser)?,
+            Self::Float32(v) => v.0.serialize(ser)?,
+            Self::Float64(v) => v.0.serialize(ser)?,
+            Self::Utf8(v) => v.serialize(ser)?,
+            Self::Bool(v) => v.serialize(ser)?,
+            Self::Int16(v) => v.serialize(ser)?,
+            Self::Int32(v) => v.serialize(ser)?,
+            Self::Decimal(v) => match v {
+                Decimal::Normalized(v) => ser.serialize_decimal(Some(*v))?,
+                Decimal::NaN | Decimal::PositiveINF | Decimal::NegativeINF => {
+                    ser.serialize_decimal(None)?
+                }
+            },
+            Self::NaiveDate(v) => ser.serialize_naivedate(v.0)?,
+            Self::NaiveDateTime(v) => ser.serialize_naivedatetime(v.0)?,
+            Self::NaiveTime(v) => ser.serialize_naivetime(v.0)?,
+            Self::Struct(_) => {
+                todo!("Don't support struct serialization yet")
+            }
+            Self::List(_) => {
+                todo!("Don't support list serialization yet")
+            }
+            Self::Interval(_) => {
+                todo!("Don't support interval serialization yet")
+            }
+        };
+        Ok(())
+    }
+
     /// Serialize the scalar.
     pub fn serialize(
         &self,
