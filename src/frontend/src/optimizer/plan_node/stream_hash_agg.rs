@@ -34,12 +34,14 @@ impl StreamHashAgg {
         let pk_indices = logical.base.pk_indices.to_vec();
         let input = logical.input();
         let input_dist = input.distribution();
+        println!("[rc] input_dist: {:?}", input_dist);
         let dist = match input_dist {
             Distribution::HashShard(_) => logical
                 .i2o_col_mapping()
                 .rewrite_provided_distribution(input_dist),
             d => d.clone(),
         };
+        println!("[rc] final dist: {:?}", dist);
         // Hash agg executor might change the append-only behavior of the stream.
         let base = PlanBase::new_stream(ctx, logical.schema().clone(), pk_indices, dist, false);
         StreamHashAgg { base, logical }
@@ -79,6 +81,7 @@ impl ToStreamProst for StreamHashAgg {
     fn to_stream_prost_body(&self) -> ProstStreamNode {
         use risingwave_pb::stream_plan::*;
         let (internal_tables, column_mappings) = self.logical.infer_internal_table_catalog();
+        println!("[rc] internal_tables: {:?}", internal_tables);
         ProstStreamNode::HashAgg(HashAggNode {
             group_key: self.group_key().iter().map(|idx| *idx as u32).collect_vec(),
             agg_calls: self

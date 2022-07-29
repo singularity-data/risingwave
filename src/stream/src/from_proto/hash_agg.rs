@@ -64,6 +64,7 @@ impl ExecutorBuilder for HashAggExecutorBuilder {
         _stream: &mut LocalStreamManagerCore,
     ) -> Result<BoxedExecutor> {
         let node = try_match_expand!(node.get_node_body().unwrap(), NodeBody::HashAgg)?;
+        println!("[rc] hash agg state tables: {:?}", node.internal_tables);
         let key_indices = node
             .get_group_key()
             .iter()
