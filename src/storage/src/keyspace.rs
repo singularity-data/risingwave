@@ -166,6 +166,30 @@ impl<S: StateStore> Keyspace<S> {
         Ok(strip_prefix_iterator)
     }
 
+    pub async fn prefix_iter_with_range<R, B, P>(
+        &self,
+        prefix_key: P,
+        range: R,
+        read_options: ReadOptions,
+    ) -> StorageResult<StripPrefixIterator<S::Iter>>
+    where
+        R: RangeBounds<B> + Send + 'static,
+        B: AsRef<[u8]> + Send + 'static,
+        P: AsRef<[u8]> + Send + 'static,
+    {
+        // let range = prefixed_range(range, &self.prefix);
+        let prefix_key = [self.prefix.as_slice(), prefix_key.as_ref()].concat();
+        let iter = self
+            .store
+            .prefix_iter(prefix_key, range, read_options)
+            .await?;
+        let strip_prefix_iterator = StripPrefixIterator {
+            iter,
+            prefix_len: self.prefix.len(),
+        };
+        Ok(strip_prefix_iterator)
+    }
+
     /// Gets the underlying state store.
     pub fn state_store(&self) -> S {
         self.store.clone()

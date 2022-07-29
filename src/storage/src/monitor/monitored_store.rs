@@ -265,6 +265,52 @@ where
                 .inspect_err(|e| error!("Failed in clear_shared_buffer: {:?}", e))
         }
     }
+
+    fn prefix_iter<R, B, P>(
+        &self,
+        prefix_key: P,
+        key_range: R,
+        read_options: ReadOptions,
+    ) -> Self::PrefixIterFuture<'_, R, B, P>
+    where
+        R: RangeBounds<B> + Send,
+        B: AsRef<[u8]> + Send,
+        P: AsRef<[u8]> + Send,
+    {
+        async move {
+            self.monitored_iter(self.inner.prefix_iter(prefix_key, key_range, read_options))
+                .await
+        }
+    }
+
+    fn prefix_scan<R, B, P>(
+        &self,
+        prefix_key: P,
+        col_bound_range: R,
+        limit: Option<usize>,
+        read_options: ReadOptions,
+    ) -> Self::PrefixScanFuture<'_, R, B, P>
+    where
+        R: RangeBounds<B> + Send + 'static,
+        B: AsRef<[u8]> + Send + 'static,
+        P: AsRef<[u8]> + Send + 'static,
+    {
+        async move {
+            let timer = self.stats.range_scan_duration.start_timer();
+            let result = self
+                .inner
+                .prefix_scan(prefix_key, col_bound_range, limit, read_options)
+                .await
+                .inspect_err(|e| error!("Failed in scan: {:?}", e))?;
+            timer.observe_duration();
+
+            self.stats
+                .range_scan_size
+                .observe(result.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() as _);
+
+            Ok(result)
+        }
+    }
 }
 
 impl MonitoredStateStore<HummockStorage> {

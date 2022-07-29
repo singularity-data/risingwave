@@ -128,6 +128,39 @@ impl StateStore for PanicStateStore {
             panic!("should not clear shared buffer from the panic state store!");
         }
     }
+
+    fn prefix_iter<R, B, P>(
+        &self,
+        _prefix_key: P,
+        _key_range: R,
+        _read_options: ReadOptions,
+    ) -> Self::PrefixIterFuture<'_, R, B, P>
+    where
+        R: RangeBounds<B> + Send,
+        B: AsRef<[u8]> + Send,
+        P: AsRef<[u8]> + Send,
+    {
+        async move {
+            panic!("should not create prefix_iter from the state store!");
+        }
+    }
+
+    fn prefix_scan<R, B, P>(
+        &self,
+        _prefix_key: P,
+        _col_bound_range: R,
+        _limit: Option<usize>,
+        _read_options: ReadOptions,
+    ) -> Self::PrefixScanFuture<'_, R, B, P>
+    where
+        R: RangeBounds<B> + Send + 'static,
+        B: AsRef<[u8]> + Send + 'static,
+        P: AsRef<[u8]> + Send + 'static,
+    {
+        async move {
+            panic!("should not prefix scan from the state store!");
+        }
+    }
 }
 
 pub struct PanicStateStoreIter {}
