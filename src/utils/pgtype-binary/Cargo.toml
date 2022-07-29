@@ -1,0 +1,19 @@
+[package]
+name = "pgtype-binary"
+version = "0.1.0"
+edition = "2021"
+description = "postgresql type binary format."
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+postgres-types = { version = "0.X.X", features = ["derive","with-chrono-0_4"] }
+rust_decimal = { version = "1", features = ["db-tokio-postgres"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
