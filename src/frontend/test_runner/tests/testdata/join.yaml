@@ -271,7 +271,51 @@
     select * from a, b join c on a1 + b1 = c1;
   binder_error: 'Item not found: Invalid column: a1'
 - sql: |
-    create table a(a1 int);
-    create table b(b1 int);
-    select * from a join lateral (select * from b where a1 = b1);
-  binder_error: 'Feature is not yet implemented: lateral subqueries are not yet supported, Tracking issue: https://github.com/singularity-data/risingwave/issues/3815'
+    /* Ensure correct binding of natural inner join */
+    create table t1(v1 varchar);
+    create table t2(v1 varchar);
+    select * from t1 natural join t2;
+  optimized_logical_plan: |
+    LogicalJoin { type: Inner, on: ($0 = $1), output_indices: [0] }
+      LogicalScan { table: t1, columns: [v1] }
+      LogicalScan { table: t2, columns: [v1] }
+- sql: |
+    /* Ensure correct binding of natural full outer join */
+    create table t1(v1 varchar);
+    create table t2(v1 varchar);
+    select * from t1 natural full join t2;
+  optimized_logical_plan: |
+    LogicalProject { exprs: [Coalesce($0, $1)] }
+      LogicalJoin { type: FullOuter, on: ($0 = $1), output_indices: all }
+        LogicalScan { table: t1, columns: [v1] }
+        LogicalScan { table: t2, columns: [v1] }
+- sql: |
+    /* Ensure correct binding of natural left outer join */
+    create table t1(v1 varchar);
+    create table t2(v1 varchar);
+    select * from t1 natural left join t2;
+  optimized_logical_plan: |
+    LogicalJoin { type: LeftOuter, on: ($0 = $1), output_indices: [0] }
+      LogicalScan { table: t1, columns: [v1] }
+      LogicalScan { table: t2, columns: [v1] }
+- sql: |
+    /* Ensure correct binding of natural right outer join */
+    create table t1(v1 varchar);
+    create table t2(v1 varchar);
+    select * from t1 natural left join t2;
+  optimized_logical_plan: |
+    LogicalJoin { type: LeftOuter, on: ($0 = $1), output_indices: [0] }
+      LogicalScan { table: t1, columns: [v1] }
+      LogicalScan { table: t2, columns: [v1] }
+- sql: |
+    /* Ensure natural join works as input to a join tree */
+    create table t1(v1 varchar);
+    create table t2(v1 varchar);
+    create table t3(v2 varchar);
+    select * from t1 natural left join t2 join t3 on v1 = v2;
+  optimized_logical_plan: |
+    LogicalJoin { type: Inner, on: ($0 = $1), output_indices: all }
+      LogicalJoin { type: LeftOuter, on: ($0 = $1), output_indices: [0] }
+        LogicalScan { table: t1, columns: [v1] }
+        LogicalScan { table: t2, columns: [v1] }
+      LogicalScan { table: t3, columns: [v2] }

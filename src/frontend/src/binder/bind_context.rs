@@ -118,6 +118,74 @@ impl BindContext {
         }
     }
 
+    /// Removes indices and rewrites remaining indices.
+    pub fn remove_indices(&mut self, indices: &[usize]) {
+        let mut index_remapping = Vec::<Option<usize>>::with_capacity(self.columns.len());
+        let mut new_idx = 0;
+        for idx in 0..self.columns.len() {
+            if indices.contains(&idx) {
+                index_remapping.push(None);
+            } else {
+                index_remapping.push(Some(new_idx));
+                new_idx += 1;
+            }
+        }
+
+        let mut new_columns = Vec::with_capacity(new_idx);
+        for (idx, col) in self.columns.iter().enumerate() {
+            if let Some(new_idx) = index_remapping[idx] {
+                let mut new_col_binding = col.clone();
+                new_col_binding.index = new_idx;
+                new_columns.push(new_col_binding);
+            }
+        }
+        self.columns = new_columns;
+
+        for range in self.range_of.values_mut() {
+            let mut non_none_old_lower = range.0;
+
+            let mut maybe_new_lower = None;
+            while non_none_old_lower < range.1 {
+                if let Some(new_lower) = index_remapping[non_none_old_lower] {
+                    maybe_new_lower = Some(new_lower);
+                    break;
+                }
+                non_none_old_lower += 1;
+            }
+            if let Some(new_lower) = maybe_new_lower {
+                let mut non_none_old_upper = range.1;
+
+                let mut maybe_new_upper = None;
+                while non_none_old_lower < non_none_old_upper && non_none_old_upper > 0 {
+                    if let Some(Some(new_upper)) = index_remapping.get(non_none_old_upper) {
+                        maybe_new_upper = Some(*new_upper);
+                        break;
+                    }
+                    non_none_old_upper -= 1; // this will never underflow
+                }
+                // If we couldn't find new upper, set it to new_lower + 1
+                if let Some(new_upper) = maybe_new_upper {
+                    *range = (new_lower, new_upper);
+                } else {
+                    *range = (new_lower, new_lower + 1);
+                }
+            } else {
+                // else: maybe we should delete this table instead?
+                *range = (0, 0); // empty range
+            }
+        }
+
+        for indices in self.indexs_of.values_mut() {
+            let mut new_indices = vec![];
+            for idx in indices.iter() {
+                if let Some(new_idx) = index_remapping[*idx] {
+                    new_indices.push(new_idx);
+                }
+            }
+            *indices = new_indices;
+        }
+    }
+
     /// Merges two `BindContext`s which are adjacent. For instance, the `BindContext` of two
     /// adjacent cross-joined tables.
     pub fn merge_context(&mut self, other: Self) -> Result<()> {
