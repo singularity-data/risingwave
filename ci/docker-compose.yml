@@ -1,4 +1,5 @@
 version: "3.9"
+
 services:
   db:
     image: postgres
@@ -16,6 +17,9 @@ services:
 
   rw-build-env:
     image: public.ecr.aws/x5u3w5h6/rw-build-env:v20220729
+    depends_on:
+      mysql:
+        condition: service_healthy
     volumes:
       - ..:/risingwave
 
@@ -26,3 +30,28 @@ services:
         condition: service_healthy
     volumes:
       - ..:/risingwave
+
+  mysql:
+    image: mysql/mysql-server:latest
+    container_name: mysql
+    ports:
+      - '3306:3306'
+    volumes:
+      - ./init:/docker-entrypoint-initdb.d
+    environment:
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
+    healthcheck:
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      timeout: 40s
+      retries: 5
+    networks:
+      nw:
+        ipv4_address: 172.24.2.1
+
+networks:
+  nw:
+    driver: bridge
+    ipam:
+        driver: default
+        config:
+            - subnet: "172.24.2.0/16"

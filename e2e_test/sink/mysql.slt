@@ -1,0 +1,17 @@
+statement ok
+CREATE TABLE t (v1 int);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+
+statement ok
+CREATE SINK s FROM mv WITH (
+    sink_type = 'mysql',
+    endpoint = '172.24.2.1:3306',
+    user = 'root',
+    database = 'test',
+    table = 't1'
+);
+
+statement ok
+INSERT INTO t VALUES (1), (1), (2), (3), (5), (8), (13), (21), (34);

@@ -20,16 +20,16 @@ auto-retry: &auto-retry
       limit: 2
 
 steps:
-  - label: "check ci image rebuild"
-    plugins:
-      - chronotc/monorepo-diff#v2.3.0:
-          diff: "git diff --name-only origin/main"
-          watch:
-            - path: "ci/build-ci-image.sh"
-              config:
-                command: "ci/build-ci-image.sh"
-                label: "ci build images"
-  - wait
+  # - label: "check ci image rebuild"
+  #   plugins:
+  #     - chronotc/monorepo-diff#v2.3.0:
+  #         diff: "git diff --name-only origin/main"
+  #         watch:
+  #           - path: "ci/build-ci-image.sh"
+  #             config:
+  #               command: "ci/build-ci-image.sh"
+  #               label: "ci build images"
+  # - wait
 
   - label: "build"
     command: "ci/scripts/build.sh -t debug -p dev"
@@ -43,47 +43,60 @@ steps:
     timeout_in_minutes: 10
     retry: *auto-retry
 
-  - label: "end-to-end test"
-    command: "ci/scripts/e2e-test.sh -p dev"
-    depends_on: "build"
-    plugins:
-      - gencer/cache#v2.4.10: *cargo-cache
-      - seek-oss/aws-sm#v2.3.1:
-          env:
-            BUILDKITE_ANALYTICS_TOKEN: buildkite-build-analytics-sqllogictest-token
-      - docker-compose#v3.9.0:
-          run: rw-build-env
-          config: ci/docker-compose.yml
-          mount-buildkite-agent: true
-      - test-collector#v1.0.0:
-          files: "*-junit.xml"
-          format: "junit"
-      - ./ci/plugins/upload-failure-logs
-    timeout_in_minutes: 10
-    retry: *auto-retry
+  # - label: "end-to-end test"
+  #   command: "ci/scripts/e2e-test.sh -p dev"
+  #   depends_on: "build"
+  #   plugins:
+  #     - gencer/cache#v2.4.10: *cargo-cache
+  #     - seek-oss/aws-sm#v2.3.1:
+  #         env:
+  #           BUILDKITE_ANALYTICS_TOKEN: buildkite-build-analytics-sqllogictest-token
+  #     - docker-compose#v3.9.0:
+  #         run: rw-build-env
+  #         config: ci/docker-compose.yml
+  #         mount-buildkite-agent: true
+  #     - test-collector#v1.0.0:
+  #         files: "*-junit.xml"
+  #         format: "junit"
+  #     - ./ci/plugins/upload-failure-logs
+  #   timeout_in_minutes: 10
+  #   retry: *auto-retry
 
-  - label: "end-to-end test (parallel)"
-    command: "ci/scripts/e2e-test-parallel.sh -p dev"
-    depends_on: "build"
-    plugins:
-      - gencer/cache#v2.4.10: *cargo-cache
-      - seek-oss/aws-sm#v2.3.1:
-          env:
-            BUILDKITE_ANALYTICS_TOKEN: buildkite-build-analytics-sqllogictest-token
-      - docker-compose#v3.9.0:
-          run: rw-build-env
-          config: ci/docker-compose.yml
-          mount-buildkite-agent: true
-      - test-collector#v1.0.0:
-          files: "*-junit.xml"
-          format: "junit"
-      - ./ci/plugins/upload-failure-logs
-    timeout_in_minutes: 10
-    retry: *auto-retry
-    soft_fail: true
+  # - label: "end-to-end test (parallel)"
+  #   command: "ci/scripts/e2e-test-parallel.sh -p dev"
+  #   depends_on: "build"
+  #   plugins:
+  #     - gencer/cache#v2.4.10: *cargo-cache
+  #     - seek-oss/aws-sm#v2.3.1:
+  #         env:
+  #           BUILDKITE_ANALYTICS_TOKEN: buildkite-build-analytics-sqllogictest-token
+  #     - docker-compose#v3.9.0:
+  #         run: rw-build-env
+  #         config: ci/docker-compose.yml
+  #         mount-buildkite-agent: true
+  #     - test-collector#v1.0.0:
+  #         files: "*-junit.xml"
+  #         format: "junit"
+  #     - ./ci/plugins/upload-failure-logs
+  #   timeout_in_minutes: 10
+  #   retry: *auto-retry
+  #   soft_fail: true
 
-  - label: "end-to-end source test"
-    command: "ci/scripts/e2e-source-test.sh"
+  # - label: "end-to-end source test"
+  #   command: "ci/scripts/e2e-source-test.sh"
+  #   depends_on: "build"
+  #   plugins:
+  #     - gencer/cache#v2.4.10: *cargo-cache
+  #     - docker-compose#v3.9.0:
+  #         run: rw-build-env
+  #         config: ci/docker-compose.yml
+  #         mount-buildkite-agent: true
+  #     - ./ci/plugins/upload-failure-logs
+  #   timeout_in_minutes: 5
+  #   retry: *auto-retry
+
+  - label: "end-to-end sink test"
+    command: "ci/scripts/e2e-sink-test.sh"
     depends_on: "build"
     plugins:
       - gencer/cache#v2.4.10: *cargo-cache
@@ -95,69 +108,69 @@ steps:
     timeout_in_minutes: 5
     retry: *auto-retry
 
-  - label: "regress test"
-    command: "ci/scripts/regress-test.sh"
-    depends_on: "build"
-    plugins:
-      - gencer/cache#v2.4.10: *cargo-cache
-      - docker-compose#v3.9.0:
-          run: regress-test-env
-          config: ci/docker-compose.yml
-          mount-buildkite-agent: true
-      - ./ci/plugins/upload-failure-logs
-    timeout_in_minutes: 5
-    retry: *auto-retry
+  # - label: "regress test"
+  #   command: "ci/scripts/regress-test.sh"
+  #   depends_on: "build"
+  #   plugins:
+  #     - gencer/cache#v2.4.10: *cargo-cache
+  #     - docker-compose#v3.9.0:
+  #         run: regress-test-env
+  #         config: ci/docker-compose.yml
+  #         mount-buildkite-agent: true
+  #     - ./ci/plugins/upload-failure-logs
+  #   timeout_in_minutes: 5
+  #   retry: *auto-retry
 
-  - label: "unit test"
-    command: "ci/scripts/pr-unit-test.sh"
-    plugins:
-      - ./ci/plugins/swapfile
-      - gencer/cache#v2.4.10: *cargo-cache
-      - seek-oss/aws-sm#v2.3.1:
-          env:
-            CODECOV_TOKEN: my-codecov-token
-            BUILDKITE_ANALYTICS_TOKEN: buildkite-test-analytics-token
-      - docker-compose#v3.9.0:
-          run: rw-build-env
-          config: ci/docker-compose.yml
-          environment:
-            - CODECOV_TOKEN
-      - test-collector#v1.0.0:
-          files: "target/nextest/ci/junit-*.xml"
-          format: "junit"
-    timeout_in_minutes: 15
-    retry: *auto-retry
+  # - label: "unit test"
+  #   command: "ci/scripts/pr-unit-test.sh"
+  #   plugins:
+  #     - ./ci/plugins/swapfile
+  #     - gencer/cache#v2.4.10: *cargo-cache
+  #     - seek-oss/aws-sm#v2.3.1:
+  #         env:
+  #           CODECOV_TOKEN: my-codecov-token
+  #           BUILDKITE_ANALYTICS_TOKEN: buildkite-test-analytics-token
+  #     - docker-compose#v3.9.0:
+  #         run: rw-build-env
+  #         config: ci/docker-compose.yml
+  #         environment:
+  #           - CODECOV_TOKEN
+  #     - test-collector#v1.0.0:
+  #         files: "target/nextest/ci/junit-*.xml"
+  #         format: "junit"
+  #   timeout_in_minutes: 15
+  #   retry: *auto-retry
 
-  - label: "pre unit test"
-    command: "ci/scripts/pre-unit-test.sh"
-    plugins:
-      - gencer/cache#v2.4.10: *cargo-cache
-      - docker-compose#v3.9.0:
-          run: rw-build-env
-          config: ci/docker-compose.yml
-    timeout_in_minutes: 15
-    retry: *auto-retry
+  # - label: "pre unit test"
+  #   command: "ci/scripts/pre-unit-test.sh"
+  #   plugins:
+  #     - gencer/cache#v2.4.10: *cargo-cache
+  #     - docker-compose#v3.9.0:
+  #         run: rw-build-env
+  #         config: ci/docker-compose.yml
+  #   timeout_in_minutes: 15
+  #   retry: *auto-retry
 
-  - label: "unit test (deterministic simulation)"
-    command: "ci/scripts/deterministic-simulation-test.sh"
-    plugins:
-      - gencer/cache#v2.4.10: *cargo-cache
-      - docker-compose#v3.9.0:
-          run: rw-build-env
-          config: ci/docker-compose.yml
-          mount-buildkite-agent: true
-    timeout_in_minutes: 15
-    soft_fail: true
-    retry: *auto-retry
+  # - label: "unit test (deterministic simulation)"
+  #   command: "ci/scripts/deterministic-simulation-test.sh"
+  #   plugins:
+  #     - gencer/cache#v2.4.10: *cargo-cache
+  #     - docker-compose#v3.9.0:
+  #         run: rw-build-env
+  #         config: ci/docker-compose.yml
+  #         mount-buildkite-agent: true
+  #   timeout_in_minutes: 15
+  #   soft_fail: true
+  #   retry: *auto-retry
 
-  - label: "misc check"
-    command: "ci/scripts/misc-check.sh"
-    plugins:
-      - gencer/cache#v2.4.10: *cargo-cache
-      - docker-compose#v3.9.0:
-          run: rw-build-env
-          config: ci/docker-compose.yml
-      - shellcheck#v1.2.0:
-          files: ./**/*.sh
-    timeout_in_minutes: 5
-    retry: *auto-retry
+  # - label: "misc check"
+  #   command: "ci/scripts/misc-check.sh"
+  #   plugins:
+  #     - gencer/cache#v2.4.10: *cargo-cache
+  #     - docker-compose#v3.9.0:
+  #         run: rw-build-env
+  #         config: ci/docker-compose.yml
+  #     - shellcheck#v1.2.0:
+  #         files: ./**/*.sh
+  #   timeout_in_minutes: 5
+  #   retry: *auto-retry
