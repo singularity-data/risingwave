@@ -28,7 +28,7 @@ use thiserror::Error;
 pub use tracing;
 
 use crate::sink::kafka::{KafkaConfig, KafkaSink, KAFKA_SINK};
-use crate::sink::mysql::{MySQLConfig, MySQLSink};
+use crate::sink::mysql::{MySQLConfig, MySQLSink, MYSQL_SINK};
 use crate::sink::redis::{RedisConfig, RedisSink};
 
 #[async_trait]
@@ -72,6 +72,7 @@ impl SinkConfig {
         })?;
         match sink_type.to_lowercase().as_str() {
             KAFKA_SINK => Ok(SinkConfig::Kafka(KafkaConfig::from_hashmap(properties)?)),
+            MYSQL_SINK => Ok(SinkConfig::Mysql(MySQLConfig::from_hashmap(properties)?)),
             _ => unimplemented!(),
         }
     }

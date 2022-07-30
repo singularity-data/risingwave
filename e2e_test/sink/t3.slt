@@ -1,0 +1,23 @@
+statement ok
+CREATE TABLE t3 (v1 int, v2 int, v3 int);
+
+statement ok
+CREATE MATERIALIZED VIEW mv3 AS SELECT * FROM t3;
+
+statement ok
+CREATE SINK s3 FROM mv3 WITH (
+    sink_type = 'mysql',
+    endpoint = '127.0.0.1:3306',
+    user = 'root',
+    database = 'test',
+    table = 't3'
+);
+
+statement ok
+INSERT INTO t3 VALUES (1, 2, 3), (1, 2, 3), (2, 2, 3), (3, 2, 3), (5, 2, 3), (8, 2, 3), (13, 2, 3), (21, 2, 3);
+
+statement ok
+DROP SINK s3;
+
+statement ok
+DROP MATERIALIZED VIEW mv3;

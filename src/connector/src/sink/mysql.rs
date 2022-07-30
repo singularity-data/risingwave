@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use async_trait::async_trait;
@@ -25,6 +26,8 @@ use risingwave_common::types::{Datum, Decimal, ScalarImpl};
 
 use crate::sink::{Result, Sink, SinkError};
 
+pub const MYSQL_SINK: &str = "mysql";
+
 #[derive(Clone, Debug)]
 pub struct MySQLConfig {
     pub endpoint: String,
@@ -32,6 +35,24 @@ pub struct MySQLConfig {
     pub database: Option<String>,
     pub user: Option<String>,
     pub password: Option<String>,
+}
+
+impl MySQLConfig {
+    pub fn from_hashmap(values: HashMap<String, String>) -> Result<Self> {
+        let endpoint = values.get("endpoint").expect("endpoint must be set");
+        let table = values.get("table").expect("table must be set");
+        let database = values.get("database");
+        let user = values.get("user");
+        let password = values.get("password");
+
+        Ok(MySQLConfig {
+            endpoint: endpoint.to_string(),
+            table: table.to_string(),
+            database: database.cloned(),
+            user: user.cloned(),
+            password: password.cloned(),
+        })
+    }
 }
 
 // Primitive design of MySQLSink
@@ -60,7 +81,6 @@ impl MySQLSink {
         }
 
         let conn = Conn::new(builder).await?;
-
         Ok(Self {
             cfg,
             conn,
@@ -163,7 +183,15 @@ async fn write_to_mysql<'a>(
         chunk
             .columns()
             .iter()
-            .map(|x| MySQLValue::try_from(x.array_ref().datum_at(idx)))
+            .zip_eq(schema.names().iter())
+            .filter_map(|(c, n)| {
+                // Exclude row id column.
+                if !n.ends_with("_row_id") {
+                    Some(MySQLValue::try_from(c.array_ref().datum_at(idx)))
+                } else {
+                    None
+                }
+            })
             .collect_vec()
             .into_iter()
             .collect()
