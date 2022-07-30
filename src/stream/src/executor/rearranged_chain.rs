@@ -20,7 +20,7 @@ use futures::{stream, StreamExt};
 use futures_async_stream::try_stream;
 use risingwave_common::array::StreamChunk;
 use risingwave_common::catalog::Schema;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 
 use super::error::StreamExecutorError;
 use super::{
@@ -156,9 +156,15 @@ impl RearrangedChainExecutor {
 
             // 3. Rearrange stream, will yield the barriers polled from upstream to rearrange.
             let upstream = Arc::new(Mutex::new(upstream));
+            let tokens = Arc::new(Semaphore::new(0));
             let rearranged_barrier = Box::pin(
-                Self::rearrange_barrier(upstream.clone(), upstream_tx, stop_rearrange_rx)
-                    .map(|result| result.map(RearrangedMessage::RearrangedBarrier)),
+                Self::rearrange_barrier(
+                    upstream.clone(),
+                    upstream_tx,
+                    stop_rearrange_rx,
+                    tokens.clone(),
+                )
+                .map(|result| result.map(RearrangedMessage::RearrangedBarrier)),
             );
 
             // 4. Init the snapshot with reading epoch.
@@ -204,10 +210,21 @@ impl RearrangedChainExecutor {
 
                     // If we received a message, yield it.
                     RearrangedMessage::RearrangedBarrier(barrier) => {
+                        // Reset tokens for new epoch.
+                        tokens
+                            .try_acquire_many(tokens.available_permits() as _)
+                            .unwrap()
+                            .forget();
+                        assert_eq!(tokens.available_permits(), 0);
+
                         last_rearranged_epoch = barrier.epoch;
                         yield Message::Barrier(barrier);
                     }
-                    RearrangedMessage::Chunk(chunk) => yield Message::Chunk(chunk),
+                    RearrangedMessage::Chunk(chunk) => {
+                        // Add tokens since we've consumed a chunk.
+                        tokens.add_permits(chunk.cardinality());
+                        yield Message::Chunk(chunk);
+                    }
                 }
             }
 
@@ -268,11 +285,13 @@ impl RearrangedChainExecutor {
         upstream: Arc<Mutex<U>>,
         upstream_tx: mpsc::UnboundedSender<RearrangedMessage>,
         mut stop_rearrange_rx: oneshot::Receiver<()>,
+        tokens: Arc<Semaphore>,
     ) where
         U: MessageStream + std::marker::Unpin,
     {
         // There should be no contention since `upstream` is used only after this stream finishes.
         let mut upstream = upstream.try_lock().unwrap();
+        let mut acquire_tokens = 0;
 
         loop {
             use futures::future::{select, Either};
@@ -291,6 +310,8 @@ impl RearrangedChainExecutor {
                     // with `RearrangedMessage::phantom_from` in-place.
                     // If we polled a chunk, simply put it to the `upstream_tx`.
                     if let Some(barrier) = msg.as_barrier().cloned() {
+                        let count = std::mem::take(&mut acquire_tokens);
+                        tokens.acquire_many(count as _).await.unwrap().forget();
                         yield barrier;
                     }
                     upstream_tx
