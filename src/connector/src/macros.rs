@@ -20,13 +20,25 @@ macro_rules! impl_split_enumerator {
              pub async fn create(properties: ConnectorProperties) -> Result<Self> {
                 match properties {
                     $( ConnectorProperties::$variant_name(props) => $split_enumerator_name::new(props).await.map(Self::$variant_name), )*
-                    other => Err(anyhow!("split enumerator type for config {:?} is not supported", other)),
+                    other => Err(anyhow!(
+                        "split enumerator type for config {:?} is not supported",
+                        other
+                    )),
                 }
              }
 
              pub async fn list_splits(&mut self) -> Result<Vec<SplitImpl>> {
                 match self {
-                    $( Self::$variant_name(inner) => inner.list_splits().await.map(|ss| ss.into_iter().map(SplitImpl::$variant_name).collect_vec()), )*
+                    $( Self::$variant_name(inner) => inner
+                        .list_splits()
+                        .await
+                        .map(|ss| {
+                            ss.into_iter()
+                                .map(SplitImpl::$variant_name)
+                                .collect_vec()
+                        })
+                        .map_err(|e| ErrorCode::ConnectorError(e.to_string()).into()),
+                    )*
                 }
              }
         }

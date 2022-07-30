@@ -20,6 +20,7 @@ use bytes::Bytes;
 use enum_as_inner::EnumAsInner;
 use itertools::Itertools;
 use prost::Message;
+use risingwave_common::error::ErrorCode;
 use risingwave_pb::source::ConnectorSplit;
 use serde::{Deserialize, Serialize};
 

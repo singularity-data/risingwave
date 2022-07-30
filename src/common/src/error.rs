@@ -20,12 +20,9 @@ use std::io::Error as IoError;
 use std::sync::Arc;
 
 use memcomparable::Error as MemComparableError;
-use prost::Message;
-use risingwave_pb::common::Status;
 use risingwave_pb::ProstFieldNotFound;
 use thiserror::Error;
 use tokio::task::JoinError;
-use tonic::metadata::{MetadataMap, MetadataValue};
 use tonic::Code;
 
 use crate::array::ArrayError;
@@ -191,34 +188,13 @@ impl From<RwError> for tonic::Status {
             ErrorCode::OK => tonic::Status::ok(err.to_string()),
             ErrorCode::ExprError(e) => tonic::Status::invalid_argument(e.to_string()),
             ErrorCode::PermissionDenied(e) => tonic::Status::permission_denied(e),
-            _ => {
-                let bytes = {
-                    let status = err.to_status();
-                    let mut bytes = Vec::<u8>::with_capacity(status.encoded_len());
-                    status.encode(&mut bytes).expect("Failed to encode status.");
-                    bytes
-                };
-                let mut header = MetadataMap::new();
-                header.insert_bin(RW_ERROR_GRPC_HEADER, MetadataValue::from_bytes(&bytes));
-                tonic::Status::with_metadata(Code::Internal, err.to_string(), header)
-            }
+            ErrorCode::InternalError(e) => tonic::Status::internal(e),
+            _ => tonic::Status::internal(err.to_string()),
         }
     }
 }
 
 impl RwError {
-    /// Converting to risingwave's status.
-    ///
-    /// We can't use grpc/tonic's library directly because we need to customized error code and
-    /// information.
-    fn to_status(&self) -> Status {
-        // TODO: We need better error reporting for stacktrace.
-        Status {
-            code: self.inner.get_code() as i32,
-            message: self.to_string(),
-        }
-    }
-
     pub fn inner(&self) -> &ErrorCode {
         &self.inner
     }
@@ -314,46 +290,6 @@ impl PartialEq for RwError {
     }
 }
 
-impl ErrorCode {
-    fn get_code(&self) -> u32 {
-        match self {
-            ErrorCode::OK => 0,
-            ErrorCode::InternalError(_) => 1,
-            ErrorCode::MemoryError { .. } => 2,
-            ErrorCode::StreamError(_) => 3,
-            ErrorCode::NotImplemented(..) => 4,
-            ErrorCode::IoError(_) => 5,
-            ErrorCode::StorageError(_) => 6,
-            ErrorCode::ParseError(_) => 7,
-            ErrorCode::NumericValueOutOfRange => 8,
-            ErrorCode::ProtocolError(_) => 9,
-            ErrorCode::TaskNotFound => 10,
-            ErrorCode::ProstError(_) => 11,
-            ErrorCode::ItemNotFound(_) => 13,
-            ErrorCode::InvalidInputSyntax(_) => 14,
-            ErrorCode::MemComparableError(_) => 15,
-            ErrorCode::ValueEncodingError(_) => 16,
-            ErrorCode::InvalidConfigValue { .. } => 17,
-            ErrorCode::MetaError(_) => 18,
-            ErrorCode::CatalogError(..) => 21,
-            ErrorCode::Eof => 22,
-            ErrorCode::BindError(_) => 23,
-            ErrorCode::UnknownWorker => 24,
-            ErrorCode::ConnectorError(_) => 25,
-            ErrorCode::InvalidParameterValue(_) => 26,
-            ErrorCode::UnrecognizedConfigurationParameter(_) => 27,
-            ErrorCode::ExprError(_) => 28,
-            ErrorCode::ArrayError(_) => 29,
-            ErrorCode::SchedulerError(_) => 30,
-            ErrorCode::SinkError(_) => 31,
-            ErrorCode::RpcError(_) => 32,
-            ErrorCode::BatchError(_) => 33,
-            ErrorCode::PermissionDenied(_) => 34,
-            ErrorCode::UnknownError(_) => 101,
-        }
-    }
-}
-
 impl PartialEq for ErrorCode {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -386,7 +322,7 @@ impl From<tonic::Status> for RwError {
                 ErrorCode::InvalidParameterValue(err.message().to_string()).into()
             }
             Code::PermissionDenied => ErrorCode::PermissionDenied(err.message().to_string()).into(),
-            _ => ErrorCode::RpcError(err.into()).into(),
+            _ => ErrorCode::InternalError(err.message().to_string()).into(),
         }
     }
 }

@@ -89,7 +89,13 @@ impl SplitEnumerator for KafkaSplitEnumerator {
     }
 
     async fn list_splits(&mut self) -> anyhow::Result<Vec<KafkaSplit>> {
-        let topic_partitions = self.fetch_topic_partition()?;
+        let topic_partitions = self.fetch_topic_partition().map_err(|e| {
+            anyhow!(
+                "failed to fetch metadata from kafka ({}): {}",
+                self.broker_address,
+                e
+            )
+        })?;
 
         let mut start_offsets = self
             .fetch_start_offset(topic_partitions.as_ref())

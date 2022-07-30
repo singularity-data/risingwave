@@ -23,20 +23,21 @@ use serde_json::Value;
 macro_rules! ensure_float {
     ($v:ident, $t:ty) => {
         $v.as_f64()
-            .ok_or_else(|| anyhow!(concat!("expect ", stringify!($t))))?
+            .ok_or_else(|| anyhow!(concat!("expect ", stringify!($t), ", but found {}"), $v))?
     };
 }
 
 macro_rules! ensure_int {
     ($v:ident, $t:ty) => {
         $v.as_i64()
-            .ok_or_else(|| anyhow!(concat!("expect ", stringify!($t))))?
+            .ok_or_else(|| anyhow!(concat!("expect ", stringify!($t), ", but found {}"), $v))?
     };
 }
 
 macro_rules! ensure_str {
     ($v:ident, $t:literal) => {
-        $v.as_str().ok_or_else(|| anyhow!(concat!("expect ", $t)))?
+        $v.as_str()
+            .ok_or_else(|| anyhow!(concat!("expect ", $t, ", but found {}"), $v))?
     };
 }
 
@@ -81,6 +82,8 @@ fn do_parse_json_value(column: &ColumnDesc, v: &Value) -> Result<ScalarImpl> {
 pub(crate) fn json_parse_value(column: &ColumnDesc, value: Option<&Value>) -> Result<Datum> {
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => Ok(Some(do_parse_json_value(column, v)?)),
+        Some(v) => Ok(Some(do_parse_json_value(column, v).map_err(|e| {
+            anyhow!("failed to parse column '{}' from json: {}", column.name, e)
+        })?)),
     }
 }
