@@ -88,7 +88,7 @@ impl fmt::Display for BatchNestedLoopJoin {
                     &format_args!(
                         "{:?}",
                         &IndicesDisplay {
-                            vec: self.logical.output_indices(),
+                            indices: self.logical.output_indices(),
                             input_schema: &concat_schema,
                         }
                     ),

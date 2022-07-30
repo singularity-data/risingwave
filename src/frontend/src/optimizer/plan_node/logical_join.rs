@@ -85,7 +85,7 @@ impl fmt::Display for LogicalJoin {
                     &format_args!(
                         "{:?}",
                         &IndicesDisplay {
-                            vec: self.output_indices(),
+                            indices: self.output_indices(),
                             input_schema: &concat_schema,
                         }
                     ),

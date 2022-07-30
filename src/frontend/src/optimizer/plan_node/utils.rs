@@ -138,7 +138,7 @@ impl TableCatalogBuilder {
 
 #[derive(Clone, Copy)]
 pub struct IndicesDisplay<'a> {
-    pub vec: &'a [usize],
+    pub indices: &'a [usize],
     pub input_schema: &'a Schema,
 }
 
@@ -147,7 +147,7 @@ impl fmt::Display for IndicesDisplay<'_> {
         write!(
             f,
             "[{}]",
-            self.vec
+            self.indices
                 .iter()
                 .map(|i| self.input_schema.fields.get(*i).unwrap().name.clone())
                 .collect_vec()
@@ -161,7 +161,7 @@ impl fmt::Debug for IndicesDisplay<'_> {
         write!(
             f,
             "[{}]",
-            self.vec
+            self.indices
                 .iter()
                 .map(|i| self.input_schema.fields.get(*i).unwrap().name.clone())
                 .collect_vec()

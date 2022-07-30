@@ -22,6 +22,7 @@ use risingwave_pb::stream_plan::StreamNode as ProstStreamPlan;
 
 use super::{LogicalScan, PlanBase, PlanNodeId, StreamIndexScan, ToStreamProst};
 use crate::catalog::ColumnId;
+use crate::optimizer::plan_node::utils::IndicesDisplay;
 use crate::optimizer::property::{Distribution, DistributionDisplay};
 
 /// `StreamTableScan` is a virtual plan node to represent a stream table scan. It will be converted
@@ -102,7 +103,10 @@ impl fmt::Display for StreamTableScan {
         if verbose {
             builder.field(
                 "pk",
-                &format_args!("[{}]", self.logical.pk_names_with_table_prefix().join(", ")),
+                &IndicesDisplay {
+                    indices: self.pk_indices(),
+                    input_schema: &self.base.schema,
+                },
             );
             builder.field(
                 "distribution",
