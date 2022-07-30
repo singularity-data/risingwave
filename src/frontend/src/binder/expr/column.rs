@@ -36,12 +36,21 @@ impl Binder {
             }
         };
 
-        if let Ok(index) = self
+        let result = self
             .context
-            .get_column_binding_index(&table_name, &column_name)
-        {
-            let column = &self.context.columns[index];
-            return Ok(InputRef::new(column.index, column.field.data_type.clone()).into());
+            .get_column_binding_index(&table_name, &column_name);
+        match result {
+            Ok(index) => {
+                let column = &self.context.columns[index];
+                return Ok(InputRef::new(column.index, column.field.data_type.clone()).into());
+            }
+            Err(e) => {
+                // If the error message is not that the column is not found, throw the error
+                if let ErrorCode::ItemNotFound(_) = e.inner() {
+                } else {
+                    return Err(e);
+                }
+            }
         }
 
         // Try to find a correlated column in `upper_contexts`, starting from the innermost context.

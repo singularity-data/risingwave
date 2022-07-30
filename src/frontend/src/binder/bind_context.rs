@@ -90,7 +90,7 @@ impl BindContext {
             .get(column_name)
             .ok_or_else(|| ErrorCode::ItemNotFound(format!("Invalid column: {}", column_name)))?;
         if columns.len() > 1 {
-            Err(ErrorCode::InternalError("Ambiguous column name".into()).into())
+            Err(ErrorCode::InternalError(format!("Ambiguous column name: {}", column_name)).into())
         } else {
             Ok(columns[0])
         }
