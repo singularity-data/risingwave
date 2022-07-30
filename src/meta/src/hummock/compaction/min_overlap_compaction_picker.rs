@@ -15,7 +15,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use risingwave_pb::hummock::{InputLevel, Level, LevelType, SstableInfo};
+use risingwave_hummock_sdk::compaction_group::hummock_version_ext::HummockLevelsExt;
+use risingwave_pb::hummock::hummock_version::Levels;
+use risingwave_pb::hummock::{InputLevel, LevelType, SstableInfo};
 
 use super::CompactionPicker;
 use crate::hummock::compaction::overlap_strategy::OverlapStrategy;
@@ -165,21 +167,29 @@ impl MinOverlappingPicker {
 impl CompactionPicker for MinOverlappingPicker {
     fn pick_compaction(
         &self,
-        levels: &[Level],
+        levels: &Levels,
         level_handlers: &mut [LevelHandler],
     ) -> Option<CompactionInput> {
+        assert!(self.level > 0);
         let (select_input_ssts, target_input_ssts) = self.pick_tables(
-            &levels[self.level].table_infos,
-            &levels[self.level + 1].table_infos,
+            &levels.get_level(self.level).table_infos,
+            &levels.get_level(self.target_level).table_infos,
             level_handlers,
         );
         if select_input_ssts.is_empty() {
             return None;
         }
-        level_handlers[self.level].add_pending_task(self.compact_task_id, &select_input_ssts);
+        level_handlers[self.level].add_pending_task(
+            self.compact_task_id,
+            self.target_level,
+            &select_input_ssts,
+        );
         if !target_input_ssts.is_empty() {
-            level_handlers[self.target_level]
-                .add_pending_task(self.compact_task_id, &target_input_ssts);
+            level_handlers[self.target_level].add_pending_task(
+                self.compact_task_id,
+                self.target_level,
+                &target_input_ssts,
+            );
         }
         Some(CompactionInput {
             input_levels: vec![
@@ -205,19 +215,15 @@ pub mod tests {
     pub use risingwave_pb::hummock::{KeyRange, Level, LevelType};
 
     use super::*;
-    use crate::hummock::compaction::level_selector::tests::generate_table;
+    use crate::hummock::compaction::level_selector::tests::{
+        generate_l0_with_overlap, generate_table,
+    };
     use crate::hummock::compaction::overlap_strategy::RangeOverlapStrategy;
 
     #[test]
     fn test_compact_l1() {
         let picker = MinOverlappingPicker::new(0, 1, 2, Arc::new(RangeOverlapStrategy::default()));
         let levels = vec![
-            Level {
-                level_idx: 0,
-                level_type: LevelType::Overlapping as i32,
-                table_infos: vec![],
-                total_file_size: 0,
-            },
             Level {
                 level_idx: 1,
                 level_type: LevelType::Nonoverlapping as i32,
@@ -227,6 +233,7 @@ pub mod tests {
                     generate_table(2, 1, 222, 300, 1),
                 ],
                 total_file_size: 0,
+                sub_level_id: 0,
             },
             Level {
                 level_idx: 2,
@@ -239,8 +246,13 @@ pub mod tests {
                     generate_table(8, 2, 301, 400, 1),
                 ],
                 total_file_size: 0,
+                sub_level_id: 0,
             },
         ];
+        let levels = Levels {
+            levels,
+            l0: Some(generate_l0_with_overlap(vec![])),
+        };
         let mut levels_handler = vec![
             LevelHandler::new(0),
             LevelHandler::new(1),
@@ -284,12 +296,6 @@ pub mod tests {
         let picker = MinOverlappingPicker::new(0, 1, 2, Arc::new(RangeOverlapStrategy::default()));
         let levels = vec![
             Level {
-                level_idx: 0,
-                level_type: LevelType::Overlapping as i32,
-                table_infos: vec![],
-                total_file_size: 0,
-            },
-            Level {
                 level_idx: 1,
                 level_type: LevelType::Nonoverlapping as i32,
                 table_infos: vec![
@@ -298,6 +304,7 @@ pub mod tests {
                     generate_table(2, 1, 150, 249, 2),
                 ],
                 total_file_size: 0,
+                sub_level_id: 0,
             },
             Level {
                 level_idx: 2,
@@ -307,8 +314,13 @@ pub mod tests {
                     generate_table(5, 1, 200, 399, 1),
                 ],
                 total_file_size: 0,
+                sub_level_id: 0,
             },
         ];
+        let levels = Levels {
+            levels,
+            l0: Some(generate_l0_with_overlap(vec![])),
+        };
         let mut levels_handler = vec![
             LevelHandler::new(0),
             LevelHandler::new(1),

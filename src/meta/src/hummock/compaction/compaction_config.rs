@@ -16,12 +16,12 @@ use risingwave_common::config::constant::hummock::CompactionFilterFlag;
 use risingwave_pb::hummock::compaction_config::CompactionMode;
 use risingwave_pb::hummock::CompactionConfig;
 
-const DEFAULT_MAX_COMPACTION_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 4GB
-const DEFAULT_MIN_COMPACTION_BYTES: u64 = 128 * 1024 * 1024; // 128MB
-const DEFAULT_MAX_BYTES_FOR_LEVEL_BASE: u64 = 1024 * 1024 * 1024; // 1GB
+const DEFAULT_MAX_COMPACTION_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2GB
+const DEFAULT_MIN_COMPACTION_BYTES: u64 = 256 * 1024 * 1024; // 256MB
+const DEFAULT_MAX_BYTES_FOR_LEVEL_BASE: u64 = 512 * 1024 * 1024; // 512MB
 
 // decrease this configure when the generation of checkpoint barrier is not frequent.
-const DEFAULT_TIER_COMPACT_TRIGGER_NUMBER: u64 = 16;
+const DEFAULT_TIER_COMPACT_TRIGGER_NUMBER: u64 = 8;
 const DEFAULT_TARGET_FILE_SIZE_BASE: u64 = 32 * 1024 * 1024; // 32MB
 const DEFAULT_MAX_SUB_COMPACTION: u32 = 4;
 const MAX_LEVEL: u64 = 6;
@@ -38,7 +38,7 @@ impl CompactionConfigBuilder {
                 max_bytes_for_level_multiplier: 10,
                 max_level: MAX_LEVEL,
                 max_compaction_bytes: DEFAULT_MAX_COMPACTION_BYTES,
-                min_compaction_bytes: DEFAULT_MIN_COMPACTION_BYTES,
+                sub_level_max_compaction_bytes: DEFAULT_MIN_COMPACTION_BYTES,
                 level0_tigger_file_numer: DEFAULT_TIER_COMPACT_TRIGGER_NUMBER * 2,
                 level0_tier_compact_file_number: DEFAULT_TIER_COMPACT_TRIGGER_NUMBER,
                 target_file_size_base: DEFAULT_TARGET_FILE_SIZE_BASE,
@@ -49,7 +49,7 @@ impl CompactionConfigBuilder {
                 compression_algorithm: vec![
                     "None".to_string(),
                     "None".to_string(),
-                    "Lz4".to_string(),
+                    "None".to_string(),
                     "Lz4".to_string(),
                     "Lz4".to_string(),
                     "Zstd".to_string(),
@@ -96,7 +96,7 @@ builder_field! {
     max_bytes_for_level_multiplier: u64,
     max_level: u64,
     max_compaction_bytes: u64,
-    min_compaction_bytes: u64,
+    sub_level_max_compaction_bytes: u64,
     level0_tigger_file_numer: u64,
     level0_tier_compact_file_number: u64,
     compaction_mode: i32,

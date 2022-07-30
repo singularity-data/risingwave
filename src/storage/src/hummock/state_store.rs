@@ -264,13 +264,7 @@ impl HummockStorage {
                                 .await?;
                             table_counts += 1;
                             if let Some(v) = self
-                                .get_from_table(
-                                    table,
-                                    &internal_key,
-                                    key,
-                                    &read_options,
-                                    &mut stats,
-                                )
+                                .get_from_table(table, &internal_key, key, &mut stats)
                                 .await?
                             {
                                 return Ok(v);
@@ -287,20 +281,18 @@ impl HummockStorage {
             if level.table_infos.is_empty() {
                 continue;
             }
-            {
-                let table_infos = prune_ssts(level.table_infos.iter(), &(key..=key));
-                for table_info in table_infos.into_iter().rev() {
-                    let table = self
-                        .sstable_store
-                        .sstable(table_info.id, &mut stats)
-                        .await?;
-                    table_counts += 1;
-                    if let Some(v) = self
-                        .get_from_table(table, &internal_key, key, &read_options, &mut stats)
-                        .await?
-                    {
-                        return Ok(v);
-                    }
+            let table_infos = prune_ssts(level.table_infos.iter(), &(key..=key));
+            for table_info in table_infos {
+                let table = self
+                    .sstable_store
+                    .sstable(table_info.id, &mut stats)
+                    .await?;
+                table_counts += 1;
+                if let Some(v) = self
+                    .get_from_table(table, &internal_key, key, &mut stats)
+                    .await?
+                {
+                    return Ok(v);
                 }
             }
         }

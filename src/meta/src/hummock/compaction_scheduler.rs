@@ -48,14 +48,14 @@ impl CompactionRequestChannel {
     /// Enqueues only if the target is not yet in queue.
     pub fn try_send(&self, compaction_group: CompactionGroupId) -> bool {
         let mut guard = self.scheduled.lock();
-        if guard.get(&compaction_group).is_some() {
+        if guard.contains(&compaction_group) {
             return false;
         }
-        if self.request_tx.send(compaction_group).is_ok() {
-            guard.insert(compaction_group);
-            return true;
+        if self.request_tx.send(compaction_group).is_err() {
+            return false;
         }
-        false
+        guard.insert(compaction_group);
+        true
     }
 
     fn unschedule(&self, compaction_group: CompactionGroupId) {
@@ -145,6 +145,10 @@ where
         if CompactStatus::is_trivial_move_task(&compact_task) {
             compact_task.task_status = true;
             compact_task.sorted_output_ssts = compact_task.input_ssts[0].table_infos.clone();
+            tracing::info!(
+                "trivial move task: \n{}",
+                compact_task_to_string(&compact_task)
+            );
             return self
                 .hummock_manager
                 .report_compact_task_impl(&compact_task, true)

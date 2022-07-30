@@ -278,7 +278,6 @@ impl SstableStore {
                     let meta_path = self.get_sst_meta_path(sst_id);
                     let data_path = self.get_sst_data_path(sst_id);
                     stats.cache_meta_block_miss += 1;
-
                     async move {
                         let meta = match meta_data {
                             Some(data) => data,

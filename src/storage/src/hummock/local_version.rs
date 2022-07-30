@@ -16,7 +16,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use itertools::Itertools;
 use parking_lot::lock_api::ArcRwLockReadGuard;
 use parking_lot::{RawRwLock, RwLock};
 use risingwave_hummock_sdk::compaction_group::hummock_version_ext::HummockVersionExt;
@@ -153,11 +152,15 @@ impl PinnedVersion {
     pub fn levels(&self, compaction_group_id: Option<CompactionGroupId>) -> Vec<&Level> {
         match compaction_group_id {
             None => self.version.get_combined_levels(),
-            Some(compaction_group_id) => self
-                .version
-                .get_compaction_group_levels(compaction_group_id)
-                .iter()
-                .collect_vec(),
+            Some(compaction_group_id) => {
+                let levels = self
+                    .version
+                    .get_compaction_group_levels(compaction_group_id);
+                let mut ret = vec![];
+                ret.extend(levels.l0.as_ref().unwrap().sub_levels.iter().rev());
+                ret.extend(levels.levels.iter());
+                ret
+            }
         }
     }
 

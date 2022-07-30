@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use itertools::Itertools;
-
 pub mod compaction_config;
 mod level_selector;
 mod manual_compaction_picker;
@@ -21,16 +19,20 @@ mod min_overlap_compaction_picker;
 mod overlap_strategy;
 mod prost_type;
 mod tier_compaction_picker;
+pub use tier_compaction_picker::TierCompactionPicker;
+mod base_level_compaction_picker;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+pub use base_level_compaction_picker::LevelCompactionPicker;
 use risingwave_hummock_sdk::compaction_group::hummock_version_ext::HummockVersionExt;
 use risingwave_hummock_sdk::prost_key_range::KeyRangeExt;
 use risingwave_hummock_sdk::{CompactionGroupId, HummockCompactionTaskId, HummockEpoch};
 use risingwave_pb::hummock::compaction_config::CompactionMode;
+use risingwave_pb::hummock::hummock_version::Levels;
 use risingwave_pb::hummock::{
-    CompactTask, CompactionConfig, HummockVersion, InputLevel, KeyRange, Level, LevelType,
+    CompactTask, CompactionConfig, HummockVersion, InputLevel, KeyRange, LevelType,
 };
 
 use crate::hummock::compaction::level_selector::{DynamicLevelSelector, LevelSelector};
@@ -116,7 +118,7 @@ impl CompactStatus {
 
     pub fn get_compact_task(
         &mut self,
-        levels: &[Level],
+        levels: &Levels,
         task_id: HummockCompactionTaskId,
         compaction_group_id: CompactionGroupId,
         manual_compaction_option: Option<ManualCompactionOption>,
@@ -164,6 +166,7 @@ impl CompactStatus {
             compaction_filter_mask: 0,
             table_options: HashMap::default(),
             current_epoch_time: 0,
+            target_sub_level_id: ret.input.target_sub_level_id,
         };
         Some(compact_task)
     }
@@ -193,7 +196,7 @@ impl CompactStatus {
 
     fn pick_compaction(
         &mut self,
-        levels: &[Level],
+        levels: &Levels,
         task_id: HummockCompactionTaskId,
     ) -> Option<CompactionTask> {
         self.compaction_selector
@@ -202,7 +205,7 @@ impl CompactStatus {
 
     fn manual_pick_compaction(
         &mut self,
-        levels: &[Level],
+        levels: &Levels,
         task_id: HummockCompactionTaskId,
         manual_compaction_option: ManualCompactionOption,
     ) -> Option<CompactionTask> {
@@ -244,23 +247,22 @@ impl CompactStatus {
         let mut new_version = based_hummock_version;
         new_version.safe_epoch = std::cmp::max(new_version.safe_epoch, compact_task.watermark);
         let mut removed_table: HashSet<u64> = HashSet::default();
+        let mut removed_levels = vec![];
         for input_level in &compact_task.input_ssts {
             for table in &input_level.table_infos {
                 removed_table.insert(table.id);
             }
+            removed_levels.push(input_level.level_idx);
         }
-        let new_version_levels =
-            new_version.get_compaction_group_levels_mut(compact_task.compaction_group_id);
 
-        HummockVersion::apply_compact_ssts(
-            new_version_levels,
-            &compact_task
-                .input_ssts
-                .iter()
-                .map(|level| level.level_idx)
-                .collect_vec(),
+        removed_levels.sort();
+        removed_levels.dedup();
+        new_version.apply_compact_ssts(
+            compact_task.compaction_group_id,
+            &removed_levels,
             &removed_table,
             compact_task.target_level,
+            compact_task.target_sub_level_id,
             compact_task.sorted_output_ssts.clone(),
         );
 
@@ -300,7 +302,7 @@ impl Default for ManualCompactionOption {
 pub trait CompactionPicker {
     fn pick_compaction(
         &self,
-        levels: &[Level],
+        levels: &Levels,
         level_handlers: &mut [LevelHandler],
     ) -> Option<CompactionInput>;
 }

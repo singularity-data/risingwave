@@ -163,10 +163,14 @@ mod tests {
     ) where
         S: MetaStore,
     {
-        let original_tables = generate_test_tables(
+        let mut original_tables = generate_test_tables(
             epoch,
             vec![hummock_manager_ref.get_new_table_id().await.unwrap()],
         );
+        original_tables.append(&mut generate_test_tables(
+            epoch,
+            vec![hummock_manager_ref.get_new_table_id().await.unwrap()],
+        ));
         register_sstable_infos_to_compaction_group(
             hummock_manager_ref.compaction_group_manager_ref_for_test(),
             &original_tables,
@@ -196,6 +200,7 @@ mod tests {
             compaction_filter_mask: 0,
             table_options: HashMap::default(),
             current_epoch_time: 0,
+            target_sub_level_id: 0,
         }
     }
 
@@ -267,6 +272,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+
         compactor.send_task(Some(task.clone()), None).await.unwrap();
         // Get a compact task.
         assert_eq!(

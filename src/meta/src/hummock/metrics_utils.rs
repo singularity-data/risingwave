@@ -42,9 +42,20 @@ pub fn trigger_sst_stat(
     compaction_group_id: CompactionGroupId,
 ) {
     // TODO #2065: fix grafana
-    let levels = current_version.get_compaction_group_levels(compaction_group_id);
-    let level_sst_cnt = |level_idx: usize| levels[level_idx].table_infos.len();
-    let level_sst_size = |level_idx: usize| levels[level_idx].total_file_size / 1024;
+    let level_sst_cnt = |level_idx: usize| {
+        let mut sst_num = 0;
+        current_version.map_level(compaction_group_id, level_idx, |level| {
+            sst_num += level.table_infos.len();
+        });
+        sst_num
+    };
+    let level_sst_size = |level_idx: usize| {
+        let mut level_sst_size = 0;
+        current_version.map_level(compaction_group_id, level_idx, |level| {
+            level_sst_size += level.total_file_size;
+        });
+        level_sst_size / 1024
+    };
     for (idx, level_handler) in enumerate(compact_status.level_handlers.iter()) {
         let sst_num = level_sst_cnt(idx);
         let compact_cnt = level_handler.get_pending_file_count();
@@ -66,6 +77,17 @@ pub fn trigger_sst_stat(
             .with_label_values(&[&level_label])
             .set(level_sst_size(idx) as i64);
     }
+    let level_label = format!("cg{}_l0_sub", compaction_group_id);
+    let sst_num = current_version
+        .get_compaction_group_levels(compaction_group_id)
+        .l0
+        .as_ref()
+        .map(|l0| l0.sub_levels.len())
+        .unwrap_or(0);
+    metrics
+        .level_sst_num
+        .with_label_values(&[&level_label])
+        .set(sst_num as i64);
 
     use std::sync::atomic::AtomicU64;
 

@@ -70,7 +70,6 @@ use crate::hummock::local_version_manager::LocalVersionManager;
 use crate::hummock::sstable::SstableIteratorReadOptions;
 use crate::hummock::sstable_store::{SstableStoreRef, TableHolder};
 use crate::monitor::StoreLocalStatistic;
-use crate::store::ReadOptions;
 
 /// Hummock is the state store backend.
 #[derive(Clone)]
@@ -149,7 +148,6 @@ impl HummockStorage {
         sstable: TableHolder,
         internal_key: &[u8],
         key: &[u8],
-        _read_options: &ReadOptions,
         stats: &mut StoreLocalStatistic,
     ) -> HummockResult<Option<Option<Bytes>>> {
         // TODO: via read_options to determine whether to check bloom_filter next PR
