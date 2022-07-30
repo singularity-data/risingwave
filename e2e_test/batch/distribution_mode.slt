@@ -6,6 +6,8 @@ SET QUERY_MODE TO distributed;
 
 
 include ./basic/*.slt.part
+include ./basic/join/*.slt.part
+include ./basic/join/*/*.slt.part
 include ./aggregate/*.slt.part
 include ./types/*.slt.part
 include ./functions/*.slt.part
