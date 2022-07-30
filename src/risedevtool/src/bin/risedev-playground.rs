@@ -336,7 +336,7 @@ fn main() -> Result<()> {
 
     let task_name = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "default".to_string());
+        .unwrap_or_else(|| "playground".to_string());
 
     let risedev_config = ConfigExpander::expand(&risedev_config, &task_name)?;
     {
