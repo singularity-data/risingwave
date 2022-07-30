@@ -185,8 +185,9 @@
             LogicalScan { table: t2, columns: [_row_id, x, y] }
   optimized_logical_plan: |
     LogicalJoin { type: LeftSemi, on: (t1.y = t2.y) AND (t1.x > (t2.x + 1000:Int32)) }
-      LogicalScan { table: t1, columns: [x, y] }
-      LogicalProject { exprs: [t2.y, t2.x] }
+      LogicalProject { exprs: [t1.x, t1.y, t1.x] }
+        LogicalScan { table: t1, columns: [x, y] }
+      LogicalProject { exprs: [t2.y, (t2.x + 1000:Int32)] }
         LogicalScan { table: t2, columns: [x, y] }
 - sql: |
     create table t1(x int, y int);
@@ -382,8 +383,9 @@
     select count(*) from a where a.x=3 and a.y = (select count(*) from b where b.z = a.z and a.x = 3);
   optimized_logical_plan: |
     LogicalAgg { aggs: [count] }
-      LogicalJoin { type: Inner, on: (a.x = a.x) AND (a.z = a.z) AND (a.y = count) }
-        LogicalScan { table: a, output_columns: [x, y, z], required_columns: [x, y, z], predicate: (a.x = 3:Int32) }
+      LogicalJoin { type: Inner, on: (a.x = a.x) AND (a.z = a.z) AND (a.y::Int64 = count) }
+        LogicalProject { exprs: [a.x, a.z, a.y::Int64] }
+          LogicalScan { table: a, output_columns: [x, y, z], required_columns: [x, y, z], predicate: (a.x = 3:Int32) }
         LogicalAgg { group_key: [a.x, a.z], aggs: [count] }
           LogicalJoin { type: Inner, on: (b.z = a.z) }
             LogicalAgg { group_key: [a.x, a.z], aggs: [] }
@@ -395,8 +397,9 @@
     select count(*) from a where a.x=3 and a.y = (select count(*) from b where b.z = a.z);
   optimized_logical_plan: |
     LogicalAgg { aggs: [count] }
-      LogicalJoin { type: Inner, on: (a.z = b.z) AND (a.y = count) }
-        LogicalScan { table: a, output_columns: [y, z], required_columns: [y, z, x], predicate: (a.x = 3:Int32) }
+      LogicalJoin { type: Inner, on: (a.z = b.z) AND (a.y::Int64 = count) }
+        LogicalProject { exprs: [a.z, a.y::Int64] }
+          LogicalScan { table: a, output_columns: [y, z], required_columns: [y, z, x], predicate: (a.x = 3:Int32) }
         LogicalAgg { group_key: [b.z], aggs: [count] }
           LogicalScan { table: b, columns: [z] }
 - sql: |
@@ -416,8 +419,9 @@
     select count(*) from a where a.y = (select count(distinct x) from b where b.z = a.z);
   optimized_logical_plan: |
     LogicalAgg { aggs: [count] }
-      LogicalJoin { type: Inner, on: (a.z = b.z) AND (a.y = count(b.x) filter((flag = 0:Int64))) }
-        LogicalScan { table: a, columns: [y, z] }
+      LogicalJoin { type: Inner, on: (a.z = b.z) AND (a.y::Int64 = count(b.x) filter((flag = 0:Int64))) }
+        LogicalProject { exprs: [a.z, a.y::Int64] }
+          LogicalScan { table: a, columns: [y, z] }
         LogicalAgg { group_key: [b.z], aggs: [count(b.x) filter((flag = 0:Int64))] }
           LogicalAgg { group_key: [b.z, b.x, flag], aggs: [] }
             LogicalExpand { column_subsets: [[b.z, b.x]] }
@@ -429,8 +433,9 @@
     select count(*) from a where a.y = (select count(x) filter(where x < 100) from b where b.z = a.z);
   optimized_logical_plan: |
     LogicalAgg { aggs: [count] }
-      LogicalJoin { type: Inner, on: (a.z = b.z) AND (a.y = count(b.x) filter((b.x < 100:Int32))) }
-        LogicalScan { table: a, columns: [y, z] }
+      LogicalJoin { type: Inner, on: (a.z = b.z) AND (a.y::Int64 = count(b.x) filter((b.x < 100:Int32))) }
+        LogicalProject { exprs: [a.z, a.y::Int64] }
+          LogicalScan { table: a, columns: [y, z] }
         LogicalAgg { group_key: [b.z], aggs: [count(b.x) filter((b.x < 100:Int32))] }
           LogicalProject { exprs: [b.z, b.x] }
             LogicalScan { table: b, columns: [x, z] }

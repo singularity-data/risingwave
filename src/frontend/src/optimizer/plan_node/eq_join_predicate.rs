@@ -76,7 +76,7 @@ impl EqJoinPredicate {
     /// ```
     /// And the `create functions` should return `JoinPredicate`
     /// ```sql
-    ///   other_conds = Vec[input_ref(1) = input_ref(1), input_ref(1) > input_ref(3)],
+    ///   other_conds = Vec[input_ref(0) = input_ref(1), input_ref(1) > input_ref(3)],
     ///   keys= Vec[(1,1)]
     /// ```
     pub fn create(left_cols_num: usize, right_cols_num: usize, on_clause: Condition) -> Self {

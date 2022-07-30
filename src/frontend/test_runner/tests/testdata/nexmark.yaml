@@ -272,9 +272,10 @@
         BatchFilter { predicate: (bid.date_time >= ((TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval) - '00:00:10':Interval)) AND (bid.date_time <= (TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval)) }
           BatchHashJoin { type: Inner, predicate: bid.price = max(bid.price) }
             BatchExchange { order: [], dist: HashShard(bid.price) }
-              BatchScan { table: bid, columns: [auction, bidder, price, date_time] }
+              BatchProject { exprs: [bid.auction, bid.bidder, bid.price, bid.date_time, bid.date_time] }
+                BatchScan { table: bid, columns: [auction, bidder, price, date_time] }
             BatchExchange { order: [], dist: HashShard(max(bid.price)) }
-              BatchProject { exprs: [max(bid.price), (TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval)] }
+              BatchProject { exprs: [max(bid.price), (TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval), ((TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval) - '00:00:10':Interval)] }
                 BatchHashAgg { group_key: [(TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval)], aggs: [max(bid.price)] }
                   BatchExchange { order: [], dist: HashShard((TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval)) }
                     BatchProject { exprs: [(TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval), bid.price] }
@@ -286,9 +287,10 @@
           StreamFilter { predicate: (bid.date_time >= ((TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval) - '00:00:10':Interval)) AND (bid.date_time <= (TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval)) }
             StreamHashJoin { type: Inner, predicate: bid.price = max(bid.price) }
               StreamExchange { dist: HashShard(bid.price) }
-                StreamTableScan { table: bid, columns: [auction, bidder, price, date_time, _row_id] }
+                StreamProject { exprs: [bid.auction, bid.bidder, bid.price, bid.date_time, bid.date_time, bid._row_id] }
+                  StreamTableScan { table: bid, columns: [auction, bidder, price, date_time, _row_id] }
               StreamExchange { dist: HashShard(max(bid.price)) }
-                StreamProject { exprs: [max(bid.price), (TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval)] }
+                StreamProject { exprs: [max(bid.price), (TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval), ((TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval) - '00:00:10':Interval)] }
                   StreamHashAgg { group_key: [(TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval)], aggs: [count, max(bid.price)] }
                     StreamExchange { dist: HashShard((TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval)) }
                       StreamProject { exprs: [(TumbleStart(bid.date_time, '00:00:10':Interval) + '00:00:10':Interval), bid.price, bid._row_id] }

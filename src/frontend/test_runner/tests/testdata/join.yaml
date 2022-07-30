@@ -275,3 +275,33 @@
     create table b(b1 int);
     select * from a join lateral (select * from b where a1 = b1);
   binder_error: 'Feature is not yet implemented: lateral subqueries are not yet supported, Tracking issue: https://github.com/singularity-data/risingwave/issues/3815'
+- sql: |
+    create table t1(x int, y int);
+    create table t2(x int, y int);
+    select * from t1, t2 where t1.x + t1.y = t2.x + t2.y;
+  optimized_logical_plan: |
+    LogicalJoin { type: Inner, on: ((t1.x + t1.y) = (t2.x + t2.y)) }
+      LogicalProject { exprs: [t1.x, t1.y, (t1.x + t1.y)] }
+        LogicalScan { table: t1, columns: [x, y] }
+      LogicalProject { exprs: [t2.x, t2.y, (t2.x + t2.y)] }
+        LogicalScan { table: t2, columns: [x, y] }
+- sql: |
+    create table t1(x int, y int);
+    create table t2(x float, y int);
+    select * from t1, t2 where t1.x + t1.y = t2.x;
+  optimized_logical_plan: |
+    LogicalJoin { type: Inner, on: ((t1.x + t1.y)::Float64 = t2.x) }
+      LogicalProject { exprs: [t1.x, t1.y, (t1.x + t1.y)::Float64] }
+        LogicalScan { table: t1, columns: [x, y] }
+      LogicalProject { exprs: [t2.x, t2.y, t2.x] }
+        LogicalScan { table: t2, columns: [x, y] }
+- sql: |
+    create table t1(x decimal, y int);
+    create table t2(x float, y int);
+    select * from t1, t2 where t1.x + t1.y = t2.x + t2.y;
+  optimized_logical_plan: |
+    LogicalJoin { type: Inner, on: ((t1.x + t1.y)::Float64 = (t2.x + t2.y)) }
+      LogicalProject { exprs: [t1.x, t1.y, (t1.x + t1.y)::Float64] }
+        LogicalScan { table: t1, columns: [x, y] }
+      LogicalProject { exprs: [t2.x, t2.y, (t2.x + t2.y)] }
+        LogicalScan { table: t2, columns: [x, y] }

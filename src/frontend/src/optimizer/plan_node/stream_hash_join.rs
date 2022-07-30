@@ -44,7 +44,7 @@ pub struct StreamHashJoin {
     eq_join_predicate: EqJoinPredicate,
 
     /// Whether to force use delta join for this join node. If this is true, then indexes will
-    /// be create automatically when building the executors on meta service. For testing purpose
+    /// be created automatically when building the executors on meta service. For testing purpose
     /// only. Will remove after we have fully support shared state and index.
     is_delta: bool,
 
