@@ -25,7 +25,7 @@ use crate::{Column, Expr, SqlGenerator, Table};
 
 impl<'a, R: Rng> SqlGenerator<'a, R> {
     /// Generates time window functions.
-    pub(crate) fn gen_time_window_func(&mut self) -> TableWithJoins {
+    pub(crate) fn gen_time_window_func(&mut self) -> (TableWithJoins, Vec<Table>) {
         match self.flip_coin() {
             true => self.gen_hop(),
             false => self.gen_tumble(),
@@ -34,7 +34,7 @@ impl<'a, R: Rng> SqlGenerator<'a, R> {
 
     /// Generates `TUMBLE`.
     /// TUMBLE(data: TABLE, timecol: COLUMN, size: INTERVAL, offset?: INTERVAL)
-    fn gen_tumble(&mut self) -> TableWithJoins {
+    fn gen_tumble(&mut self) -> (TableWithJoins, Vec<Table>) {
         let tables = find_tables_with_timestamp_cols(self.tables.clone());
         let (source_table_name, time_cols, schema) = tables
             .choose(&mut self.rng)
@@ -52,14 +52,13 @@ impl<'a, R: Rng> SqlGenerator<'a, R> {
         let relation = create_tvf("tumble", alias, args);
 
         let table = Table::new(table_name, schema.clone());
-        self.add_relation_to_context(table);
 
-        relation
+        (relation, vec![table])
     }
 
     /// Generates `HOP`.
     /// HOP(data: TABLE, timecol: COLUMN, slide: INTERVAL, size: INTERVAL, offset?: INTERVAL)
-    fn gen_hop(&mut self) -> TableWithJoins {
+    fn gen_hop(&mut self) -> (TableWithJoins, Vec<Table>) {
         let tables = find_tables_with_timestamp_cols(self.tables.clone());
         let (source_table_name, time_cols, schema) = tables
             .choose(&mut self.rng)
@@ -84,9 +83,8 @@ impl<'a, R: Rng> SqlGenerator<'a, R> {
         let relation = create_tvf("hop", alias, args);
 
         let table = Table::new(table_name, schema.clone());
-        self.add_relation_to_context(table);
 
-        relation
+        (relation, vec![table])
     }
 }
 

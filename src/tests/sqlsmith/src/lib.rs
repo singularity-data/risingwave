@@ -128,10 +128,12 @@ impl<'a, R: Rng> SqlGenerator<'a, R> {
         }
     }
 
-    fn add_relation_to_context(&mut self, table: Table) {
-        let mut bound_columns = table.get_qualified_columns();
-        self.bound_columns.append(&mut bound_columns);
-        self.bound_relations.push(table);
+    fn add_relations_to_context(&mut self, mut tables: Vec<Table>) {
+        for rel in &tables {
+            let mut bound_columns = rel.get_qualified_columns();
+            self.bound_columns.append(&mut bound_columns);
+        }
+        self.bound_relations.append(&mut tables);
     }
 
     fn gen_stmt(&mut self) -> Statement {
@@ -204,7 +206,7 @@ impl<'a, R: Rng> SqlGenerator<'a, R> {
     }
 
     /// Generates a query with local context.
-    /// Used by `WITH`, (and perhaps subquery should use this too)
+    /// Used by `WITH`, subquery
     fn gen_local_query(&mut self) -> (Query, Vec<Column>) {
         let old_ctxt = self.new_local_context();
         let t = self.gen_query();
@@ -350,7 +352,9 @@ impl<'a, R: Rng> SqlGenerator<'a, R> {
                 .expect("with tables should not be empty");
             vec![create_table_with_joins_from_table(with_table)]
         } else {
-            vec![self.gen_from_relation()]
+            let (rel, tables) = self.gen_from_relation();
+            self.add_relations_to_context(tables);
+            vec![rel]
         };
 
         if self.is_mview {
@@ -359,12 +363,15 @@ impl<'a, R: Rng> SqlGenerator<'a, R> {
             assert!(!self.tables.is_empty());
             return from;
         }
-
+        let mut lateral_contexts = vec![];
         for _ in 0..self.tables.len() {
             if self.flip_coin() {
-                from.push(self.gen_from_relation());
+                let (table_with_join, mut table) = self.gen_from_relation();
+                from.push(table_with_join);
+                lateral_contexts.append(&mut table);
             }
         }
+        self.add_relations_to_context(lateral_contexts);
         from
     }
 
