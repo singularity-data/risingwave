@@ -12,14 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::hash::{BuildHasher, Hash};
-
-pub trait CacheKey: Eq + Send + Sync + Hash + Clone + 'static + std::fmt::Debug {
-    fn encoded_len() -> usize;
-
-    fn encode(&self, buf: &mut [u8]);
-
-    fn decode(buf: &[u8]) -> Self;
-}
+use std::hash::BuildHasher;
 
 pub trait HashBuilder = BuildHasher + Clone + Send + Sync + 'static;

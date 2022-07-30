@@ -332,18 +332,12 @@ pub struct LruCacheShard<K: LruKey, T: LruValue> {
     lru_usage: Arc<AtomicUsize>,
     usage: Arc<AtomicUsize>,
     capacity: usize,
-
-    listeners: Vec<Arc<dyn LruCacheEventListener<K = K, T = T>>>,
 }
 
 unsafe impl<K: LruKey, T: LruValue> Send for LruCacheShard<K, T> {}
 
 impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
-    fn new(
-        capacity: usize,
-        object_capacity: usize,
-        listeners: Vec<Arc<dyn LruCacheEventListener<K = K, T = T>>>,
-    ) -> Self {
+    fn new(capacity: usize, object_capacity: usize) -> Self {
         let mut lru = Box::new(LruHandle::default());
         lru.prev = lru.as_mut();
         lru.next = lru.as_mut();
@@ -359,8 +353,6 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
             lru,
             table: LruHandleTable::new(),
             write_request: HashMap::with_capacity(16),
-
-            listeners,
         }
     }
 
@@ -395,7 +387,7 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
         self.lru_usage.fetch_add((*e).charge, Ordering::Relaxed);
     }
 
-    unsafe fn evict_from_lru(&mut self, charge: usize, last_reference_list: &mut Vec<T>) {
+    unsafe fn evict_from_lru(&mut self, charge: usize, last_reference_list: &mut Vec<(K, T)>) {
         // TODO: may want to optimize by only loading at the beginning and storing at the end for
         // only once.
         while self.usage.load(Ordering::Relaxed) + charge > self.capacity
@@ -405,10 +397,7 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
             self.table.remove((*old_ptr).hash, (*old_ptr).get_key());
             self.lru_remove(old_ptr);
             let (key, value) = self.clear_handle(old_ptr);
-            for listener in &self.listeners {
-                listener.on_evict(&key, &value);
-            }
-            last_reference_list.push(value);
+            last_reference_list.push((key, value));
         }
     }
 
@@ -447,7 +436,7 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
         hash: u64,
         charge: usize,
         value: T,
-        last_reference_list: &mut Vec<T>,
+        last_reference_list: &mut Vec<(K, T)>,
     ) -> *mut LruHandle<K, T> {
         self.evict_from_lru(charge, last_reference_list);
 
@@ -473,7 +462,7 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
     /// Release the usage on a handle.
     ///
     /// Return: `Some(value)` if the handle is released, and `None` if the value is still in use.
-    unsafe fn release(&mut self, h: *mut LruHandle<K, T>) -> Option<T> {
+    unsafe fn release(&mut self, h: *mut LruHandle<K, T>) -> Option<(K, T)> {
         debug_assert!(!h.is_null());
         // The handle should not be in lru before calling this method.
         #[cfg(debug_assertions)]
@@ -491,9 +480,6 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
                 return None;
             }
             // Remove the handle from table.
-            for listener in &self.listeners {
-                listener.on_evict((*h).get_key(), (*h).get_value());
-            }
             self.table.remove((*h).hash, (*h).get_key());
         }
 
@@ -502,8 +488,8 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
         #[cfg(debug_assertions)]
         assert!(!(*h).is_in_lru());
 
-        let (_key, value) = self.clear_handle(h);
-        Some(value)
+        let (key, value) = self.clear_handle(h);
+        Some((key, value))
     }
 
     unsafe fn lookup(&mut self, hash: u64, key: &K) -> *mut LruHandle<K, T> {
@@ -520,7 +506,7 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
     }
 
     /// Erase a key from the cache.
-    unsafe fn erase(&mut self, hash: u64, key: &K) -> Option<T> {
+    unsafe fn erase(&mut self, hash: u64, key: &K) -> Option<(K, T)> {
         let h = self.table.remove(hash, key);
         if !h.is_null() {
             self.try_remove_cache_handle(h)
@@ -532,15 +518,15 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
     /// Try removing the handle from the cache if the handle is not used externally any more.
     ///
     /// This method can only be called on the handle that just removed from the hash table.
-    unsafe fn try_remove_cache_handle(&mut self, h: *mut LruHandle<K, T>) -> Option<T> {
+    unsafe fn try_remove_cache_handle(&mut self, h: *mut LruHandle<K, T>) -> Option<(K, T)> {
         debug_assert!(!h.is_null());
         if !(*h).has_refs() {
             // Since the handle is just removed from the hash table, it should either be in lru or
             // referenced externally. Since we have checked that it is not referenced externally, it
             // must be in the LRU, and therefore we are safe to call `lru_remove`.
             self.lru_remove(h);
-            let (_key, value) = self.clear_handle(h);
-            return Some(value);
+            let (key, value) = self.clear_handle(h);
+            return Some((key, value));
         }
         None
     }
@@ -550,6 +536,7 @@ impl<K: LruKey, T: LruValue> LruCacheShard<K, T> {
     unsafe fn clear(&mut self) {
         while !std::ptr::eq(self.lru.next, self.lru.as_mut()) {
             let handle = self.lru.next;
+            // `listener` should not be trigged here, for it doesn't listen to `clear`.
             self.erase((*handle).hash, (*handle).get_key());
         }
     }
@@ -576,8 +563,11 @@ pub trait LruCacheEventListener: Send + Sync {
     type K: LruKey;
     type T: LruValue;
 
-    /// `on_evict` is called when a cache entry is evicted by a new inserted entry.
-    fn on_evict(&self, _key: &Self::K, _value: &Self::T) {}
+    /// `on_release` is called when a cache entry is erased or evicted by a new inserted entry.
+    ///
+    /// Note:
+    /// `on_release` will not be triggered when the `LruCache` and its inner entries are dropped.
+    fn on_release(&self, _key: Self::K, _value: Self::T) {}
 }
 
 pub struct LruCache<K: LruKey, T: LruValue> {
@@ -585,7 +575,7 @@ pub struct LruCache<K: LruKey, T: LruValue> {
     shard_usages: Vec<Arc<AtomicUsize>>,
     shard_lru_usages: Vec<Arc<AtomicUsize>>,
 
-    _listeners: Vec<Arc<dyn LruCacheEventListener<K = K, T = T>>>,
+    listener: Option<Arc<dyn LruCacheEventListener<K = K, T = T>>>,
 }
 
 // we only need a small object pool because when the cache reach the limit of capacity, it will
@@ -594,13 +584,13 @@ const DEFAULT_OBJECT_POOL_SIZE: usize = 1024;
 
 impl<K: LruKey, T: LruValue> LruCache<K, T> {
     pub fn new(num_shard_bits: usize, capacity: usize) -> Self {
-        Self::with_event_listeners(num_shard_bits, capacity, vec![])
+        Self::with_event_listener(num_shard_bits, capacity, None)
     }
 
-    pub fn with_event_listeners(
+    pub fn with_event_listener(
         num_shard_bits: usize,
         capacity: usize,
-        listeners: Vec<Arc<dyn LruCacheEventListener<K = K, T = T>>>,
+        listener: Option<Arc<dyn LruCacheEventListener<K = K, T = T>>>,
     ) -> Self {
         let num_shards = 1 << num_shard_bits;
         let mut shards = Vec::with_capacity(num_shards);
@@ -608,7 +598,7 @@ impl<K: LruKey, T: LruValue> LruCache<K, T> {
         let mut shard_usages = Vec::with_capacity(num_shards);
         let mut shard_lru_usages = Vec::with_capacity(num_shards);
         for _ in 0..num_shards {
-            let shard = LruCacheShard::new(per_shard, DEFAULT_OBJECT_POOL_SIZE, listeners.clone());
+            let shard = LruCacheShard::new(per_shard, DEFAULT_OBJECT_POOL_SIZE);
             shard_usages.push(shard.usage.clone());
             shard_lru_usages.push(shard.lru_usage.clone());
             shards.push(Mutex::new(shard));
@@ -618,7 +608,7 @@ impl<K: LruKey, T: LruValue> LruCache<K, T> {
             shard_usages,
             shard_lru_usages,
 
-            _listeners: listeners,
+            listener,
         }
     }
 
@@ -664,7 +654,9 @@ impl<K: LruKey, T: LruValue> LruCache<K, T> {
             shard.release(handle)
         };
         // do not deallocate data with holding mutex.
-        drop(data);
+        if let Some((key,value)) = data && let Some(listener) = &self.listener {
+            listener.on_release(key, value);
+        }
     }
 
     pub fn insert(
@@ -694,7 +686,12 @@ impl<K: LruKey, T: LruValue> LruCache<K, T> {
                 handle: ptr,
             }
         };
-        to_delete.clear();
+        // do not deallocate data with holding mutex.
+        if let Some(listener) = &self.listener {
+            for (key, value) in to_delete {
+                listener.on_release(key, value);
+            }
+        }
         handle
     }
 
@@ -708,7 +705,10 @@ impl<K: LruKey, T: LruValue> LruCache<K, T> {
             let mut shard = self.shards[self.shard(hash)].lock();
             shard.erase(hash, key)
         };
-        drop(data);
+        // do not deallocate data with holding mutex.
+        if let Some((key,value)) = data && let Some(listener) = &self.listener {
+            listener.on_release(key, value);
+        }
     }
 
     pub fn get_memory_usage(&self) -> usize {
@@ -911,14 +911,7 @@ mod tests {
     }
 
     fn create_cache(capacity: usize) -> LruCacheShard<String, String> {
-        create_cache_with_event_listeners(capacity, vec![])
-    }
-
-    fn create_cache_with_event_listeners(
-        capacity: usize,
-        listeners: Vec<Arc<dyn LruCacheEventListener<K = String, T = String>>>,
-    ) -> LruCacheShard<String, String> {
-        LruCacheShard::new(capacity, capacity, listeners)
+        LruCacheShard::new(capacity, capacity)
     }
 
     fn lookup(cache: &mut LruCacheShard<String, String>, key: &str) -> bool {
@@ -1161,75 +1154,77 @@ mod tests {
 
     #[derive(Default, Debug)]
     struct TestLruCacheEventListener {
-        evicted: Mutex<HashMap<String, String>>,
+        released: Arc<Mutex<HashMap<String, String>>>,
     }
 
     impl LruCacheEventListener for TestLruCacheEventListener {
         type K = String;
         type T = String;
 
-        fn on_evict(&self, key: &Self::K, value: &Self::T) {
-            self.evicted.lock().insert(key.clone(), value.clone());
+        fn on_release(&self, key: Self::K, value: Self::T) {
+            self.released.lock().insert(key, value);
         }
     }
 
     #[test]
     fn test_event_listener() {
-        unsafe {
-            let listener = Arc::new(TestLruCacheEventListener::default());
-            let mut cache = create_cache_with_event_listeners(2, vec![listener.clone()]);
+        let listener = Arc::new(TestLruCacheEventListener::default());
+        let cache = Arc::new(LruCache::with_event_listener(0, 2, Some(listener.clone())));
 
-            // full-fill cache
-            let h = cache.insert("k1".to_string(), 0, 1, "v1".to_string(), &mut vec![]);
-            cache.release(h);
-            let h = cache.insert("k2".to_string(), 0, 1, "v2".to_string(), &mut vec![]);
-            cache.release(h);
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 2);
-            assert!(listener.evicted.lock().is_empty());
+        // full-fill cache
+        let h = cache.insert("k1".to_string(), 0, 1, "v1".to_string());
+        drop(h);
+        let h = cache.insert("k2".to_string(), 0, 1, "v2".to_string());
+        drop(h);
+        assert_eq!(cache.get_memory_usage(), 2);
+        assert!(listener.released.lock().is_empty());
 
-            // test evict
-            let h = cache.insert("k3".to_string(), 0, 1, "v3".to_string(), &mut vec![]);
-            cache.release(h);
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 2);
-            assert!(listener.evicted.lock().remove("k1").is_some());
+        // test evict
+        let h = cache.insert("k3".to_string(), 0, 1, "v3".to_string());
+        drop(h);
+        assert_eq!(cache.get_memory_usage(), 2);
+        assert!(listener.released.lock().remove("k1").is_some());
 
-            // test erase
-            cache.erase(0, &"k2".to_string());
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 1);
-            assert!(listener.evicted.lock().is_empty());
+        // test erase
+        cache.erase(0, &"k2".to_string());
+        assert_eq!(cache.get_memory_usage(), 1);
+        assert!(listener.released.lock().remove("k2").is_some());
 
-            // test refill
-            let h = cache.insert("k4".to_string(), 0, 1, "v4".to_string(), &mut vec![]);
-            cache.release(h);
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 2);
-            assert!(listener.evicted.lock().is_empty());
+        // test refill
+        let h = cache.insert("k4".to_string(), 0, 1, "v4".to_string());
+        drop(h);
+        assert_eq!(cache.get_memory_usage(), 2);
+        assert!(listener.released.lock().is_empty());
 
-            // test release after full
-            // 1. full-full cache but not release
-            let h1 = cache.insert("k5".to_string(), 0, 1, "v5".to_string(), &mut vec![]);
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 2);
-            assert!(listener.evicted.lock().remove("k3").is_some());
-            let h2 = cache.insert("k6".to_string(), 0, 1, "v6".to_string(), &mut vec![]);
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 2);
-            assert!(listener.evicted.lock().remove("k4").is_some());
+        // test release after full
+        // 1. full-fill cache but not release
+        let h1 = cache.insert("k5".to_string(), 0, 1, "v5".to_string());
+        assert_eq!(cache.get_memory_usage(), 2);
+        assert!(listener.released.lock().remove("k3").is_some());
+        let h2 = cache.insert("k6".to_string(), 0, 1, "v6".to_string());
+        assert_eq!(cache.get_memory_usage(), 2);
+        assert!(listener.released.lock().remove("k4").is_some());
 
-            // 2. insert one more entry after cache is full, cache will be oversized
-            let h3 = cache.insert("k7".to_string(), 0, 1, "v7".to_string(), &mut vec![]);
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 3);
-            assert!(listener.evicted.lock().is_empty());
+        // 2. insert one more entry after cache is full, cache will be oversized
+        let h3 = cache.insert("k7".to_string(), 0, 1, "v7".to_string());
+        assert_eq!(cache.get_memory_usage(), 3);
+        assert!(listener.released.lock().is_empty());
 
-            // 3. release one entry, and it will be evicted immediately bucause cache is oversized
-            cache.release(h1);
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 2);
-            assert!(listener.evicted.lock().remove("k5").is_some());
+        // 3. release one entry, and it will be evicted immediately bucause cache is oversized
+        drop(h1);
+        assert_eq!(cache.get_memory_usage(), 2);
+        assert!(listener.released.lock().remove("k5").is_some());
 
-            // 4. release other entries, no entry will be evicted
-            cache.release(h2);
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 2);
-            assert!(listener.evicted.lock().is_empty());
-            cache.release(h3);
-            assert_eq!(cache.usage.load(Ordering::Relaxed), 2);
-            assert!(listener.evicted.lock().is_empty());
-        }
+        // 4. release other entries, no entry will be evicted
+        drop(h2);
+        assert_eq!(cache.get_memory_usage(), 2);
+        assert!(listener.released.lock().is_empty());
+        drop(h3);
+        assert_eq!(cache.get_memory_usage(), 2);
+        assert!(listener.released.lock().is_empty());
+
+        // assert listener won't listen clear
+        drop(cache);
+        assert!(listener.released.lock().is_empty());
     }
 }

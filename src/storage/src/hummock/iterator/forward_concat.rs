@@ -32,7 +32,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concat_iterator() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let table0 = gen_iterator_test_sstable_base(
             0,
             default_builder_opt_for_test(),
@@ -97,7 +97,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concat_seek() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let table0 = gen_iterator_test_sstable_base(
             0,
             default_builder_opt_for_test(),
@@ -179,7 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concat_seek_not_exists() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let table0 = gen_iterator_test_sstable_base(
             0,
             default_builder_opt_for_test(),

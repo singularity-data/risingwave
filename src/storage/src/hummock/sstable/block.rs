@@ -36,6 +36,13 @@ pub struct Block {
 }
 
 impl Block {
+    pub fn new(data: Bytes, restart_points: Vec<u32>) -> Self {
+        Block {
+            data,
+            restart_points,
+        }
+    }
+
     pub fn decode(buf: Bytes) -> HummockResult<Self> {
         // Verify checksum.
         let xxhash64_checksum = (&buf[buf.len() - 8..]).get_u64_le();

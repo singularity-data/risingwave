@@ -33,7 +33,7 @@ use risingwave_storage::StateStore;
 async fn test_failpoints_state_store_read_upload() {
     let mem_upload_err = "mem_upload_err";
     let mem_read_err = "mem_read_err";
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let hummock_options = Arc::new(default_config_for_test());
     let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
         setup_compute_env(8080).await;

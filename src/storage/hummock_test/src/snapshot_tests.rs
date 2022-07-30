@@ -77,7 +77,7 @@ macro_rules! assert_count_backward_range_scan {
 }
 
 async fn test_snapshot_inner(enable_sync: bool, enable_commit: bool) {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let hummock_options = Arc::new(default_config_for_test());
     let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
         setup_compute_env(8080).await;
@@ -199,7 +199,7 @@ async fn test_snapshot_inner(enable_sync: bool, enable_commit: bool) {
 }
 
 async fn test_snapshot_range_scan_inner(enable_sync: bool, enable_commit: bool) {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let hummock_options = Arc::new(default_config_for_test());
     let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
         setup_compute_env(8080).await;
@@ -267,7 +267,7 @@ async fn test_snapshot_range_scan_inner(enable_sync: bool, enable_commit: bool) 
 }
 
 async fn test_snapshot_backward_range_scan_inner(enable_sync: bool, enable_commit: bool) {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let hummock_options = Arc::new(default_config_for_test());
     let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
         setup_compute_env(8080).await;

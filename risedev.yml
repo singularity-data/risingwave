@@ -280,6 +280,7 @@ risedev:
     - use: meta-node
       unsafe-disable-recovery: true
     - use: compute-node
+      enable-tiered-cache: true
     - use: frontend
     - use: compactor
 
@@ -292,12 +293,15 @@ risedev:
     - use: compute-node
       port: 5687
       exporter-port: 1222
+      enable-tiered-cache: true
     - use: compute-node
       port: 5688
       exporter-port: 1223
+      enable-tiered-cache: true
     - use: compute-node
       port: 5689
       exporter-port: 1224
+      enable-tiered-cache: true
     - use: frontend
     - use: compactor
 
@@ -405,6 +409,9 @@ template:
 
     # Id of this instance
     id: compute-node-${port}
+
+    # If `enable-tiered-cache` is true, hummock will use data directory as file cache.
+    enable-tiered-cache: false
 
     # Minio instances used by this compute node
     provide-minio: "minio*"

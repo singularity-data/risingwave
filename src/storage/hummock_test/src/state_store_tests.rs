@@ -31,7 +31,7 @@ use risingwave_storage::StateStoreIter;
 
 #[tokio::test]
 async fn test_basic() {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let hummock_options = Arc::new(default_config_for_test());
     let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
         setup_compute_env(8080).await;
@@ -319,7 +319,7 @@ async fn test_basic() {
 
 #[tokio::test]
 async fn test_state_store_sync() {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
 
     let mut config = default_config_for_test();
     config.shared_buffer_capacity_mb = 64;
@@ -441,7 +441,7 @@ async fn test_state_store_sync() {
 /// Fix this when we finished epoch management.
 #[ignore]
 async fn test_reload_storage() {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let hummock_options = Arc::new(default_config_for_test());
     let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
         setup_compute_env(8080).await;
@@ -629,7 +629,7 @@ async fn test_reload_storage() {
 
 #[tokio::test]
 async fn test_write_anytime() {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let hummock_options = Arc::new(default_config_for_test());
     let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
         setup_compute_env(8080).await;
@@ -872,7 +872,7 @@ async fn test_write_anytime() {
 
 #[tokio::test]
 async fn test_delete_get() {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let hummock_options = Arc::new(default_config_for_test());
     let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
         setup_compute_env(8080).await;

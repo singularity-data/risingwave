@@ -58,7 +58,7 @@ mod tests {
             write_conflict_detection_enabled: true,
             ..Default::default()
         });
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
 
         HummockStorage::with_default_stats(
             options.clone(),

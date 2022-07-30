@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use fail::fail_point;
+use risingwave_common::config::FileCacheConfig;
 use risingwave_hummock_sdk::{is_remote_sst_id, HummockSstableId};
 use risingwave_object_store::object::{get_local_path, BlockLocation, ObjectStore, ObjectStoreRef};
 
@@ -50,11 +51,13 @@ pub struct SstableStore {
 }
 
 impl SstableStore {
-    pub fn new(
+    pub async fn new(
         store: ObjectStoreRef,
         path: String,
         block_cache_capacity: usize,
         meta_cache_capacity: usize,
+        tiered_cache_uri: &str,
+        file_cache_config: FileCacheConfig,
     ) -> Self {
         let mut shard_bits = MAX_META_CACHE_SHARD_BITS;
         while (meta_cache_capacity >> shard_bits) < MIN_BUFFER_SIZE_PER_SHARD && shard_bits > 0 {
@@ -64,14 +67,20 @@ impl SstableStore {
         Self {
             path,
             store,
-            block_cache: BlockCache::new(block_cache_capacity, MAX_CACHE_SHARD_BITS),
+            block_cache: BlockCache::new(
+                block_cache_capacity,
+                MAX_CACHE_SHARD_BITS,
+                tiered_cache_uri,
+                file_cache_config,
+            )
+            .await,
             meta_cache,
         }
     }
 
     /// For compactor, we do not need a high concurrency load for cache. Instead, we need the cache
     ///  can be evict more effective.
-    pub fn for_compactor(
+    pub async fn for_compactor(
         store: ObjectStoreRef,
         path: String,
         block_cache_capacity: usize,
@@ -81,7 +90,13 @@ impl SstableStore {
         Self {
             path,
             store,
-            block_cache: BlockCache::new(block_cache_capacity, 2),
+            block_cache: BlockCache::new(
+                block_cache_capacity,
+                2,
+                "none://",
+                FileCacheConfig::default(),
+            )
+            .await,
             meta_cache,
         }
     }
@@ -216,7 +231,7 @@ impl SstableStore {
                     .get_or_insert_with(sst.id, block_index, fetch_block)
                     .await
             }
-            CachePolicy::NotFill => match self.block_cache.get(sst.id, block_index) {
+            CachePolicy::NotFill => match self.block_cache.get(sst.id, block_index).await {
                 Some(block) => Ok(block),
                 None => fetch_block().await.map(BlockHolder::from_owned_block),
             },
@@ -353,7 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_whole_data_object() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let (data, meta, _) = gen_test_sstable_data(
             default_builder_opt_for_test(),
             (0..100).map(|x| {

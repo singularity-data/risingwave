@@ -20,11 +20,12 @@ use nix::sys::statfs::{statfs, FsType as NixFsType, EXT4_SUPER_MAGIC};
 use parking_lot::RwLock;
 use risingwave_common::cache::{LruCache, LruCacheEventListener};
 
-use super::coding::{CacheKey, HashBuilder};
+use super::coding::HashBuilder;
 use super::error::{Error, Result};
 use super::file::{CacheFile, CacheFileOptions};
 use super::meta::{BlockLoc, MetaFile, SlotId};
 use super::{utils, DioBuffer, DIO_BUFFER_ALLOCATOR};
+use crate::hummock::TieredCacheKey;
 
 const META_FILE_FILENAME: &str = "meta";
 const CACHE_FILE_FILENAME: &str = "cache";
@@ -44,7 +45,7 @@ pub struct StoreOptions {
 
 pub struct Store<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     dir: String,
     _capacity: usize,
@@ -60,7 +61,7 @@ where
 
 impl<K> Store<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     pub async fn open(options: StoreOptions) -> Result<Self> {
         if !PathBuf::from(options.dir.as_str()).exists() {
@@ -217,14 +218,14 @@ where
 
 impl<K> LruCacheEventListener for Store<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     type K = K;
     type T = SlotId;
 
-    fn on_evict(&self, _key: &Self::K, slot: &Self::T) {
+    fn on_release(&self, _key: Self::K, slot: Self::T) {
         // TODO: Throw warning log instead?
-        self.free(*slot).unwrap();
+        self.free(slot).unwrap();
     }
 }
 

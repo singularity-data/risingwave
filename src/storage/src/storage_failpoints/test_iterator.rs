@@ -36,7 +36,7 @@ async fn test_failpoints_concat_read_err() {
     fail::cfg("disable_block_cache", "return").unwrap();
     fail::cfg("disable_bloom_filter", "return").unwrap();
     let mem_read_err = "mem_read_err";
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let table0 = gen_iterator_test_sstable_base(
         0,
         default_builder_opt_for_test(),
@@ -97,7 +97,7 @@ async fn test_failpoints_backward_concat_read_err() {
     fail::cfg("disable_block_cache", "return").unwrap();
     fail::cfg("disable_bloom_filter", "return").unwrap();
     let mem_read_err = "mem_read_err";
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let table0 = gen_iterator_test_sstable_base(
         0,
         default_builder_opt_for_test(),
@@ -154,7 +154,7 @@ async fn test_failpoints_merge_invalid_key() {
     fail::cfg("disable_block_cache", "return").unwrap();
     fail::cfg("disable_bloom_filter", "return").unwrap();
     let mem_read_err = "mem_read_err";
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let table0 = gen_iterator_test_sstable_base(
         0,
         default_builder_opt_for_test(),
@@ -209,7 +209,7 @@ async fn test_failpoints_backward_merge_invalid_key() {
     fail::cfg("disable_block_cache", "return").unwrap();
     fail::cfg("disable_bloom_filter", "return").unwrap();
     let mem_read_err = "mem_read_err";
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let table0 = gen_iterator_test_sstable_base(
         0,
         default_builder_opt_for_test(),
@@ -263,7 +263,7 @@ async fn test_failpoints_user_read_err() {
     fail::cfg("disable_block_cache", "return").unwrap();
     fail::cfg("disable_bloom_filter", "return").unwrap();
     let mem_read_err = "mem_read_err";
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let table0 = gen_iterator_test_sstable_base(
         0,
         default_builder_opt_for_test(),
@@ -325,7 +325,7 @@ async fn test_failpoints_backward_user_read_err() {
     fail::cfg("disable_block_cache", "return").unwrap();
     fail::cfg("disable_bloom_filter", "return").unwrap();
     let mem_read_err = "mem_read_err";
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let table0 = gen_iterator_test_sstable_base(
         0,
         default_builder_opt_for_test(),

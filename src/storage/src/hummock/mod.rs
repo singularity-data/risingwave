@@ -23,8 +23,10 @@ use risingwave_common::config::StorageConfig;
 use risingwave_hummock_sdk::*;
 use risingwave_rpc_client::HummockMetaClient;
 
-mod block_cache;
-pub use block_cache::*;
+mod cache;
+pub use cache::block_cache::*;
+pub use cache::tiered_cache::*;
+
 pub mod sstable;
 pub use sstable::*;
 
@@ -46,9 +48,6 @@ mod utils;
 pub use utils::MemoryLimiter;
 pub mod vacuum;
 pub mod value;
-
-#[cfg(target_os = "linux")]
-pub mod file_cache;
 
 use std::collections::HashMap;
 

@@ -70,6 +70,13 @@ pub struct ComputeNodeOpts {
     #[clap(long, default_value = "")]
     pub config_path: String,
 
+    /// URI for tiered cache.
+    /// "none://" and "file://<path>" are supported.
+    /// Note: Currently, "file://<path>" is only supported on linux.
+    /// Setting "file://<path>" on other targets will be ignored.
+    #[clap(long, default_value = "none://")]
+    pub tiered_cache_uri: String,
+
     /// Enable reporting tracing information to jaeger
     #[clap(long)]
     pub enable_jaeger_tracing: bool,

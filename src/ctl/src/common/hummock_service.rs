@@ -109,6 +109,7 @@ risectl requires a full persistent cluster to operate. Please make sure you're n
         let table_id_to_slice_transform = Arc::new(RwLock::new(HashMap::new()));
         let state_store_impl = StateStoreImpl::new(
             &self.hummock_url,
+            "none://",
             Arc::new(config),
             Arc::new(MonitoredHummockMetaClient::new(
                 meta_client.clone(),

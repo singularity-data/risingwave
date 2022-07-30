@@ -91,12 +91,15 @@ pub async fn compactor_serve(
         )
         .await,
     );
-    let sstable_store = Arc::new(SstableStore::for_compactor(
-        object_store,
-        storage_config.data_directory.to_string(),
-        storage_config.block_cache_capacity_mb * (1 << 20),
-        storage_config.meta_cache_capacity_mb * (1 << 20),
-    ));
+    let sstable_store = Arc::new(
+        SstableStore::for_compactor(
+            object_store,
+            storage_config.data_directory.to_string(),
+            storage_config.block_cache_capacity_mb * (1 << 20),
+            storage_config.meta_cache_capacity_mb * (1 << 20),
+        )
+        .await,
+    );
 
     let table_id_to_slice_transform = Arc::new(RwLock::new(HashMap::new()));
     let compactor_observer_node = CompactorObserverNode::new(table_id_to_slice_transform.clone());

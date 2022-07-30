@@ -27,7 +27,7 @@ use risingwave_storage::hummock::vacuum::Vacuum;
 
 #[tokio::test]
 async fn test_vacuum_tracked_data() {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     // Put some SSTs to object store
     let sst_ids = (1..10).collect_vec();
     let mut sstables = vec![];

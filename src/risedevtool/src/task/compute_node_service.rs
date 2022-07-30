@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, Result};
@@ -43,6 +43,8 @@ impl ComputeNodeService {
 
     /// Apply command args accroding to config
     pub fn apply_command_args(cmd: &mut Command, config: &ComputeNodeConfig) -> Result<()> {
+        let prefix_data = env::var("PREFIX_DATA")?;
+
         cmd.arg("--host")
             .arg(format!("{}:{}", config.listen_address, config.port))
             .arg("--prometheus-listener-addr")
@@ -53,7 +55,15 @@ impl ComputeNodeService {
             .arg("--client-address")
             .arg(format!("{}:{}", config.address, config.port))
             .arg("--metrics-level")
-            .arg("1");
+            .arg("1")
+            .arg("--tiered-cache-uri")
+            .arg(format!(
+                "file://{}",
+                PathBuf::from(prefix_data)
+                    .join("filecache")
+                    .join(config.port.to_string())
+                    .to_string_lossy()
+            ));
 
         let provide_jaeger = config.provide_jaeger.as_ref().unwrap();
         match provide_jaeger.len() {

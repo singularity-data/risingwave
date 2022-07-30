@@ -188,7 +188,7 @@ mod tests {
     #[tokio::test]
     async fn test_backward_sstable_iterator() {
         // build remote sstable
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let sstable =
             gen_default_test_sstable(default_builder_opt_for_test(), 0, sstable_store.clone())
                 .await;
@@ -215,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_backward_sstable_seek() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let sstable =
             gen_default_test_sstable(default_builder_opt_for_test(), 0, sstable_store.clone())
                 .await;

@@ -25,9 +25,9 @@ use nix::fcntl::{fallocate, FallocateFlags};
 use nix::sys::mman::{mmap, mremap, msync, munmap, MRemapFlags, MapFlags, MsFlags, ProtFlags};
 use nix::sys::stat::fstat;
 
-use super::coding::CacheKey;
 use super::error::Result;
 use super::{utils, ST_BLOCK_SIZE};
+use crate::hummock::TieredCacheKey;
 
 const GROW_UNIT: usize = 1024 * 1024; // 1 MiB
 
@@ -72,7 +72,7 @@ impl BlockLoc {
 /// The entrie file will be memory mapped to a memory buffer.
 pub struct MetaFile<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     /// File descriptor of the meta file.
     fd: RawFd,
@@ -92,12 +92,12 @@ where
     _phantom: PhantomData<K>,
 }
 
-unsafe impl<K: CacheKey> Send for MetaFile<K> {}
-unsafe impl<K: CacheKey> Sync for MetaFile<K> {}
+unsafe impl<K: TieredCacheKey> Send for MetaFile<K> {}
+unsafe impl<K: TieredCacheKey> Sync for MetaFile<K> {}
 
 impl<K> MetaFile<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let mut oopts = OpenOptions::new();
@@ -270,7 +270,7 @@ where
 
 impl<K> Drop for MetaFile<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     fn drop(&mut self) {
         unsafe {

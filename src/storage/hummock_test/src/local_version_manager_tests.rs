@@ -38,7 +38,7 @@ async fn test_update_pinned_version() {
     let (_, hummock_manager_ref, _, worker_node) = setup_compute_env(8080).await;
     let local_version_manager = LocalVersionManager::for_test(
         opt.clone(),
-        mock_sstable_store(),
+        mock_sstable_store().await,
         Arc::new(MockHummockMetaClient::new(
             hummock_manager_ref.clone(),
             worker_node.id,
@@ -126,7 +126,7 @@ async fn test_update_uncommitted_ssts() {
     let (_, hummock_manager_ref, _, worker_node) = setup_compute_env(8080).await;
     let local_version_manager = LocalVersionManager::for_test(
         opt.clone(),
-        mock_sstable_store(),
+        mock_sstable_store().await,
         Arc::new(MockHummockMetaClient::new(
             hummock_manager_ref.clone(),
             worker_node.id,
@@ -333,7 +333,7 @@ async fn test_clear_shared_buffer() {
     let (_, hummock_manager_ref, _, worker_node) = setup_compute_env(8080).await;
     let local_version_manager = LocalVersionManager::for_test(
         opt.clone(),
-        mock_sstable_store(),
+        mock_sstable_store().await,
         Arc::new(MockHummockMetaClient::new(
             hummock_manager_ref.clone(),
             worker_node.id,

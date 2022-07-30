@@ -91,6 +91,7 @@ macro_rules! dispatch_state_store {
 impl StateStoreImpl {
     pub async fn new(
         s: &str,
+        tiered_cache_uri: &str,
         config: Arc<StorageConfig>,
         hummock_meta_client: Arc<dyn HummockMetaClient>,
         state_store_stats: Arc<StateStoreMetrics>,
@@ -115,12 +116,17 @@ impl StateStoreImpl {
                     remote_object_store
                 };
 
-                let sstable_store = Arc::new(SstableStore::new(
-                    Arc::new(object_store),
-                    config.data_directory.to_string(),
-                    config.block_cache_capacity_mb * (1 << 20),
-                    config.meta_cache_capacity_mb * (1 << 20),
-                ));
+                let sstable_store = Arc::new(
+                    SstableStore::new(
+                        Arc::new(object_store),
+                        config.data_directory.to_string(),
+                        config.block_cache_capacity_mb * (1 << 20),
+                        config.meta_cache_capacity_mb * (1 << 20),
+                        tiered_cache_uri,
+                        config.file_cache.clone(),
+                    )
+                    .await,
+                );
                 let compaction_group_client =
                     Arc::new(CompactionGroupClientImpl::new(hummock_meta_client.clone()));
                 let inner = HummockStorage::new(

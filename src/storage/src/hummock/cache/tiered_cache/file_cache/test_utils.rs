@@ -21,13 +21,13 @@ use bytes::{Buf, BufMut};
 use tokio::sync::{mpsc, Mutex};
 
 use super::cache::FlushBufferHook;
-use super::coding::CacheKey;
 use super::error::Result;
+use crate::hummock::TieredCacheKey;
 
 #[derive(Clone, Hash, Debug, PartialEq, Eq)]
 pub struct TestCacheKey(pub u64);
 
-impl CacheKey for TestCacheKey {
+impl TieredCacheKey for TestCacheKey {
     fn encoded_len() -> usize {
         8
     }

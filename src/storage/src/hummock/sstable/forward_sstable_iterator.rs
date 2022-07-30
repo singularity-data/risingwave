@@ -229,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn test_table_iterator() {
         // Build remote sstable
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let sstable =
             gen_default_test_sstable(default_builder_opt_for_test(), 0, sstable_store.clone())
                 .await;
@@ -251,7 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_table_seek() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let sstable =
             gen_default_test_sstable(default_builder_opt_for_test(), 0, sstable_store.clone())
                 .await;
@@ -324,7 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prefetch_table_read() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         // when upload data is successful, but upload meta is fail and delete is fail
         let kv_iter =
             (0..TEST_KEYS_COUNT).map(|i| (test_key_of(i), HummockValue::put(test_value_of(i))));

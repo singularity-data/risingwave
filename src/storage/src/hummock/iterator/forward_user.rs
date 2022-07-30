@@ -341,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let read_options = Arc::new(SstableIteratorReadOptions::default());
         let table0 = gen_iterator_test_sstable_base(
             0,
@@ -408,7 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_seek() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let table0 = gen_iterator_test_sstable_base(
             0,
             default_builder_opt_for_test(),
@@ -505,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
 
         // key=[idx, epoch], value
         let kv_pairs = vec![
@@ -555,7 +555,7 @@ mod tests {
     // left..=end
     #[tokio::test]
     async fn test_range_inclusive() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         // key=[idx, epoch], value
         let kv_pairs = vec![
             (0, 200, HummockValue::delete()),
@@ -639,7 +639,7 @@ mod tests {
     // left..end
     #[tokio::test]
     async fn test_range() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         // key=[idx, epoch], value
         let kv_pairs = vec![
             (0, 200, HummockValue::delete()),
@@ -722,7 +722,7 @@ mod tests {
     // ..=right
     #[tokio::test]
     async fn test_range_to_inclusive() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         // key=[idx, epoch], value
         let kv_pairs = vec![
             (0, 200, HummockValue::delete()),
@@ -808,7 +808,7 @@ mod tests {
     // left..
     #[tokio::test]
     async fn test_range_from() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         // key=[idx, epoch], value
         let kv_pairs = vec![
             (0, 200, HummockValue::delete()),
@@ -897,7 +897,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_min_epoch() {
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let read_options = Arc::new(SstableIteratorReadOptions::default());
         let table0 = gen_iterator_test_sstable_with_incr_epoch(
             0,

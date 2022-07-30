@@ -17,14 +17,14 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use risingwave_common::cache::LruCache;
 
-use super::coding::CacheKey;
 use super::LRU_SHARD_BITS;
+use crate::hummock::TieredCacheKey;
 
 pub type Buffer<K> = Arc<LruCache<K, Vec<u8>>>;
 
 struct TwoLevelBufferCore<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     active_buffer: Buffer<K>,
     frozen_buffer: Buffer<K>,
@@ -32,7 +32,7 @@ where
 
 impl<K> TwoLevelBufferCore<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     fn swap(&mut self) {
         // Swap fields of `&mut self` to avoid the borrow checker complaining.
@@ -43,7 +43,7 @@ where
 #[derive(Clone)]
 pub struct TwoLevelBuffer<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     capacity: usize,
     core: Arc<RwLock<TwoLevelBufferCore<K>>>,
@@ -51,7 +51,7 @@ where
 
 impl<K> TwoLevelBuffer<K>
 where
-    K: CacheKey,
+    K: TieredCacheKey,
 {
     pub fn new(capacity: usize) -> Self {
         Self {

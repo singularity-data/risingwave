@@ -15,6 +15,7 @@
 use std::iter::Iterator;
 use std::sync::Arc;
 
+use risingwave_common::config::FileCacheConfig;
 use risingwave_hummock_sdk::key::{key_with_epoch, Epoch};
 use risingwave_hummock_sdk::HummockSstableId;
 use risingwave_object_store::object::{
@@ -45,7 +46,7 @@ macro_rules! assert_bytes_eq {
 
 pub const TEST_KEYS_COUNT: usize = 10;
 
-pub fn mock_sstable_store() -> SstableStoreRef {
+pub async fn mock_sstable_store() -> SstableStoreRef {
     mock_sstable_store_with_object_store(Arc::new(ObjectStoreImpl::Hybrid {
         local: Box::new(ObjectStoreImpl::InMem(
             InMemObjectStore::new().monitored(Arc::new(ObjectStoreMetrics::unused())),
@@ -54,11 +55,22 @@ pub fn mock_sstable_store() -> SstableStoreRef {
             InMemObjectStore::new().monitored(Arc::new(ObjectStoreMetrics::unused())),
         )),
     }))
+    .await
 }
 
-pub fn mock_sstable_store_with_object_store(store: ObjectStoreRef) -> SstableStoreRef {
+pub async fn mock_sstable_store_with_object_store(store: ObjectStoreRef) -> SstableStoreRef {
     let path = "test".to_string();
-    Arc::new(SstableStore::new(store, path, 64 << 20, 64 << 20))
+    Arc::new(
+        SstableStore::new(
+            store,
+            path,
+            64 << 20,
+            64 << 20,
+            "none://",
+            FileCacheConfig::default(),
+        )
+        .await,
+    )
 }
 
 /// Generates keys like `key_test_00002` with epoch 233.
@@ -121,7 +133,7 @@ pub async fn gen_merge_iterator_interleave_test_sstable_iters(
     key_count: usize,
     count: usize,
 ) -> Vec<SstableIterator> {
-    let sstable_store = mock_sstable_store();
+    let sstable_store = mock_sstable_store().await;
     let cache = create_small_table_cache();
     let mut result = vec![];
     for i in 0..count {

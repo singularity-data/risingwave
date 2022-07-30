@@ -268,7 +268,7 @@ pub(super) mod tests {
         };
 
         // build remote table
-        let sstable_store = mock_sstable_store();
+        let sstable_store = mock_sstable_store().await;
         let table = gen_default_test_sstable(opts, 0, sstable_store).await;
 
         assert_eq!(table.has_bloom_filter(), with_blooms);

@@ -130,6 +130,7 @@ pub async fn compute_node_serve(
 
     let state_store = StateStoreImpl::new(
         &opts.state_store,
+        &opts.tiered_cache_uri,
         storage_config.clone(),
         hummock_meta_client.clone(),
         state_store_metrics.clone(),
