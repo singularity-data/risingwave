@@ -27,6 +27,8 @@ pub async fn cluster_info() -> anyhow::Result<()> {
     let GetClusterInfoResponse {
         worker_nodes,
         table_fragments,
+        actor_splits: _,
+        stream_source_infos: _,
     } = meta_client.get_cluster_info().await?;
 
     // Fragment ID -> [Parallel Unit ID -> (Parallel Unit, Actor)]

@@ -332,6 +332,10 @@ where
             }
         }
     }
+
+    pub fn get_actor_splits(&self) -> HashMap<ActorId, Vec<SplitImpl>> {
+        self.actor_splits.clone()
+    }
 }
 
 pub(crate) fn fetch_source_fragments(
@@ -764,5 +768,9 @@ where
             .keys()
             .cloned()
             .collect_vec()
+    }
+
+    pub async fn get_actor_splits(&self) -> HashMap<ActorId, Vec<SplitImpl>> {
+        self.core.lock().await.get_actor_splits()
     }
 }
