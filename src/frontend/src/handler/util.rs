@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use itertools::Itertools;
 use num_traits::Float;
+use pgtype_binary::Serializer;
 use pgwire::pg_field_descriptor::{PgFieldDescriptor, TypeOid};
 use pgwire::types::Row;
 use risingwave_common::array::DataChunk;
@@ -40,22 +41,9 @@ fn pg_value_format(d: ScalarRefImpl, format: bool) -> Bytes {
             _ => d.to_string().into(),
         }
     } else {
-        match d {
-            ScalarRefImpl::Int16(d) => d.to_be_bytes().to_vec().into(),
-            ScalarRefImpl::Int32(d) => d.to_be_bytes().to_vec().into(),
-            ScalarRefImpl::Int64(d) => d.to_be_bytes().to_vec().into(),
-            ScalarRefImpl::Float32(_) => todo!(),
-            ScalarRefImpl::Float64(_) => todo!(),
-            ScalarRefImpl::Utf8(d) => d.to_string().into(),
-            ScalarRefImpl::Bool(_) => todo!(),
-            ScalarRefImpl::Decimal(_) => todo!(),
-            ScalarRefImpl::Interval(_) => todo!(),
-            ScalarRefImpl::NaiveDate(_) => todo!(),
-            ScalarRefImpl::NaiveDateTime(_) => todo!(),
-            ScalarRefImpl::NaiveTime(_) => todo!(),
-            ScalarRefImpl::Struct(_) => todo!(),
-            ScalarRefImpl::List(_) => todo!(),
-        }
+        let mut serializer = Serializer::new();
+        d.binary_serialize(&mut serializer).unwrap();
+        serializer.get_ouput()
     }
 }
 

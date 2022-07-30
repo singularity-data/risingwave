@@ -39,7 +39,6 @@ tokio = { version = "=0.2.0-alpha.5", package = "madsim-tokio", features = [
 toml = "0.5"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
-
 [[bin]]
 name = "file-cache-bench"
 path = "file_cache_bench/main.rs"

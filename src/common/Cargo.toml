@@ -30,6 +30,7 @@ num-traits = "0.2"
 num_cpus = "1.13.1"
 parking_lot = "0.12"
 paste = "1"
+pgtype-binary = { path = "../utils/pgtype-binary" }
 prometheus = { version = "0.13" }
 prost = "0.10"
 rand = "0.8"
