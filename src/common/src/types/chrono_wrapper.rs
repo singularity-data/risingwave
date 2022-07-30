@@ -22,7 +22,7 @@ use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 use super::{CheckedAdd, IntervalUnit};
 use crate::array::ArrayResult;
-use crate::error::{Result, RwError};
+use crate::error::Result;
 use crate::util::value_encoding::error::ValueEncodingError;
 /// The same as `NaiveDate::from_ymd(1970, 1, 1).num_days_from_ce()`.
 /// Minus this magic number to store the number of days since 1970-01-01.
@@ -224,11 +224,9 @@ impl NaiveDateTimeWrapper {
     }
 }
 
-impl TryFrom<NaiveDateWrapper> for NaiveDateTimeWrapper {
-    type Error = RwError;
-
-    fn try_from(date: NaiveDateWrapper) -> Result<Self> {
-        Ok(NaiveDateTimeWrapper::new(date.0.and_hms(0, 0, 0)))
+impl From<NaiveDateWrapper> for NaiveDateTimeWrapper {
+    fn from(date: NaiveDateWrapper) -> Self {
+        NaiveDateTimeWrapper::new(date.0.and_hms(0, 0, 0))
     }
 }
 

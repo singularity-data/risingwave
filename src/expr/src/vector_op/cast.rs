@@ -85,11 +85,6 @@ where
         .map_err(|_| ExprError::Cast(type_name::<str>(), type_name::<T>()))
 }
 
-#[inline(always)]
-pub fn date_to_timestamp(elem: NaiveDateWrapper) -> Result<NaiveDateTimeWrapper> {
-    Ok(NaiveDateTimeWrapper::new(elem.0.and_hms(0, 0, 0)))
-}
-
 /// Define the cast function to primitive types.
 ///
 /// Due to the orphan rule, some data can't implement `TryFrom` trait for basic type.

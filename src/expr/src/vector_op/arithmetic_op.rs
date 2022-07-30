@@ -24,7 +24,6 @@ use risingwave_common::types::{
     OrderedF64,
 };
 
-use super::cast::date_to_timestamp;
 use crate::{ExprError, Result};
 
 #[inline(always)]
@@ -157,7 +156,7 @@ pub fn interval_date_add<T1, T2, T3>(
     l: IntervalUnit,
     r: NaiveDateWrapper,
 ) -> Result<NaiveDateTimeWrapper> {
-    interval_timestamp_add::<T1, T2, T3>(l, date_to_timestamp(r)?)
+    interval_timestamp_add::<T1, T2, T3>(l, r.into())
 }
 
 #[inline(always)]

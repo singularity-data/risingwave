@@ -284,6 +284,18 @@ impl From<&'_ IntervalUnitProto> for IntervalUnit {
     }
 }
 
+impl From<NaiveTimeWrapper> for IntervalUnit {
+    fn from(time: NaiveTimeWrapper) -> Self {
+        let mut ms: i64 = (time.0.num_seconds_from_midnight() * 1000) as i64;
+        ms += (time.0.nanosecond() / 1_000_000) as i64;
+        Self {
+            months: 0,
+            days: 0,
+            ms,
+        }
+    }
+}
+
 impl Add for IntervalUnit {
     type Output = Self;
 

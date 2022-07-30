@@ -129,7 +129,8 @@ macro_rules! gen_cast {
             { decimal, float32, to_f32 },
             { decimal, float64, to_f64 },
 
-            { date, timestamp, date_to_timestamp }
+            { date, timestamp, general_cast },
+            { time, interval, general_cast }
         }
     };
 }
@@ -379,12 +380,12 @@ mod tests {
 
     use super::super::*;
     use crate::expr::test_utils::{make_expression, make_input_ref};
-    use crate::vector_op::cast::{date_to_timestamp, str_parse};
+    use crate::vector_op::cast::{general_cast, str_parse};
 
     #[test]
     fn test_unary() {
         test_unary_bool::<BoolArray, _>(|x| !x, Type::Not);
-        test_unary_date::<NaiveDateTimeArray, _>(|x| date_to_timestamp(x).unwrap(), Type::Cast);
+        test_unary_date::<NaiveDateTimeArray, _>(|x| general_cast(x).unwrap(), Type::Cast);
         test_str_to_int16::<I16Array, _>(|x| str_parse(x).unwrap());
     }
 
