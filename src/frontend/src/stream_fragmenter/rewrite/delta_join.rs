@@ -115,7 +115,6 @@ impl StreamFragmenter {
         state: &mut BuildFragmentGraphState,
         exchange_node: &StreamNode,
         arrange_key_indexes: Vec<i32>,
-        table_id: u32,
         table_catalog: &Table,
     ) -> (ArrangementInfo, StreamNode) {
         // Set materialize keys as arrange key + pk
@@ -160,7 +159,6 @@ impl StreamFragmenter {
                 pk_indices: exchange_node.pk_indices.clone(),
                 node_body: Some(NodeBody::Arrange(ArrangeNode {
                     table_info: Some(arrangement_info),
-                    table_id,
                     // Requires arrange key at the first few columns. This is always true for delta
                     // join.
                     distribution_key: arrange_key_indexes.iter().map(|x| *x as _).collect(),
@@ -497,14 +495,12 @@ impl StreamFragmenter {
             state,
             &exchange_i0a0,
             hash_join_node.left_key.clone(),
-            hash_join_node.left_table.as_ref().unwrap().id,
             &table_l,
         );
         let (arrange_1_info, arrange_1) = self.build_arrange_for_delta_join(
             state,
             &exchange_i1a1,
             hash_join_node.right_key.clone(),
-            hash_join_node.right_table.as_ref().unwrap().id,
             &table_r,
         );
 

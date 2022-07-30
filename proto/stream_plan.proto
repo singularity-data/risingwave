@@ -132,9 +132,9 @@ message FilterNode {
 message MaterializeNode {
   uint32 table_id = 1;
   // Column indexes and orders of primary key
-  repeated plan_common.ColumnOrder column_orders = 3;
+  repeated plan_common.ColumnOrder column_orders = 2;
   // Used for internal table states.
-  catalog.Table table = 4;
+  catalog.Table table = 3;
 }
 
 // Remark by Yanghao: for both local and global we use the same node in the protobuf.
@@ -289,14 +289,12 @@ message ArrangementInfo {
 // Special node for shared state, which will only be produced in fragmenter. ArrangeNode will
 // produce a special Materialize executor, which materializes data for downstream to query.
 message ArrangeNode {
-  // Table Id of the arrangement
-  uint32 table_id = 2;
   // Info about the arrangement
-  ArrangementInfo table_info = 3;
+  ArrangementInfo table_info = 1;
   // Hash key of the materialize node, which is a subset of pk.
-  repeated uint32 distribution_key = 4;
+  repeated uint32 distribution_key = 2;
   // Used for internal table states.
-  catalog.Table table = 5;
+  catalog.Table table = 3;
 }
 
 // Special node for shared state. LookupNode will join an arrangement with a stream.

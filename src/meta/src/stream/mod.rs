@@ -47,7 +47,8 @@ pub fn record_table_vnode_mappings(
             hash_mapping_manager.set_fragment_state_table(fragment_id, table_id);
         }
         NodeBody::Arrange(node) => {
-            hash_mapping_manager.set_fragment_state_table(fragment_id, node.table_id);
+            let table_id = node.table.as_ref().unwrap().id;
+            hash_mapping_manager.set_fragment_state_table(fragment_id, table_id);
         }
         NodeBody::HashAgg(node) => {
             for table in &node.internal_tables {
