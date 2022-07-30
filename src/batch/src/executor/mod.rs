@@ -183,7 +183,7 @@ impl<'a, C: BatchTaskContext> ExecutorBuilder<'a, C> {
             NodeBody::Limit => LimitExecutor,
             NodeBody::Values => ValuesExecutor,
             NodeBody::NestedLoopJoin => NestedLoopJoinExecutor,
-            NodeBody::HashJoin => HashJoinExecutorBuilder,
+            NodeBody::HashJoin => HashJoinExecutor<()>,
             NodeBody::SortMergeJoin => SortMergeJoinExecutor,
             NodeBody::HashAgg => HashAggExecutorBuilder,
             NodeBody::MergeSortExchange => MergeSortExchangeExecutorBuilder,

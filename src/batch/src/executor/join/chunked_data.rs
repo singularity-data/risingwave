@@ -14,7 +14,8 @@
 
 use std::ops::{Index, IndexMut};
 
-use risingwave_common::error::Result;
+use itertools::repeat_n;
+use risingwave_common::error::{Result, RwError};
 
 /// Id of one row in chunked data.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
@@ -26,7 +27,7 @@ pub struct RowId {
 /// [`ChunkedData`] is in fact a list of list.
 ///
 /// We use this data structure instead of [`Vec<Vec<V>>`] to save allocation call.
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq)]
 pub(super) struct ChunkedData<V> {
     data: Vec<V>,
     chunk_offsets: Vec<usize>,
@@ -150,6 +151,24 @@ impl<V> IndexMut<RowId> for ChunkedData<V> {
     }
 }
 
+impl<V> TryFrom<Vec<Vec<V>>> for ChunkedData<V> {
+    type Error = RwError;
+
+    fn try_from(value: Vec<Vec<V>>) -> Result<Self> {
+        let chunk_offsets = repeat_n(Ok(0), 1)
+            .chain(value.iter().map(|chunk| -> Result<usize> {
+                ensure!(!chunk.is_empty(), "Chunk size can't be zero!");
+                Ok(chunk.len())
+            }))
+            .try_collect()?;
+        let data = value.into_iter().flatten().collect();
+        Ok(Self {
+            data,
+            chunk_offsets,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,9 +223,33 @@ mod tests {
     }
 
     #[test]
+    fn test_try_from() {
+        assert_eq!(
+            ChunkedData {
+                data: vec![1, 2, 3, 4, 5, 6, 7, 9, 8, 7, 6, 5, 123],
+                chunk_offsets: vec![0, 4, 3, 5, 1],
+            },
+            ChunkedData::try_from(vec![
+                vec![1, 2, 3, 4],
+                vec![5, 6, 7],
+                vec![9, 8, 7, 6, 5],
+                vec![123],
+            ])
+            .unwrap()
+        );
+    }
+
+    #[test]
     #[should_panic]
     fn test_zero_chunk_size_should_fail() {
         let chunk_sizes = vec![4, 3, 0, 1, 2usize];
         ChunkedData::<()>::with_chunk_sizes(chunk_sizes).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_try_from_zero_chunk_size_should_fail() {
+        let chunks = vec![vec![0; 4], vec![0; 3], vec![], vec![0; 1], vec![0, 2]];
+        ChunkedData::try_from(chunks).unwrap();
     }
 }

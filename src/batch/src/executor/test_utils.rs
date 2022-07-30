@@ -24,7 +24,8 @@ use risingwave_common::array::{DataChunk, DataChunkTestExt};
 use risingwave_common::catalog::Schema;
 use risingwave_common::error::{Result, RwError};
 use risingwave_common::field_generator::FieldGeneratorImpl;
-use risingwave_common::types::{DataType, Datum, ScalarImpl, ToOwnedDatum};
+use risingwave_common::types::{DataType, Datum, ToOwnedDatum};
+use risingwave_expr::expr::BoxedExpression;
 use risingwave_pb::batch_plan::ExchangeSource as ProstExchangeSource;
 
 use crate::exchange_source::{ExchangeSource, ExchangeSourceImpl};
@@ -47,14 +48,7 @@ pub fn gen_data(batch_size: usize, batch_num: usize) -> Vec<DataChunk> {
 
         for j in 0..batch_size {
             array_builder
-                .append_datum(&Some(ScalarImpl::Int64(
-                    // TODO: We should remove this later when generator supports generate Datum,
-                    // see https://github.com/singularity-data/risingwave/issues/3519
-                    data_gen
-                        .generate(((i + 1) * (j + 1)) as u64)
-                        .as_i64()
-                        .unwrap(),
-                )))
+                .append_datum(&data_gen.generate_datum(((i + 1) * (j + 1)) as u64))
                 .unwrap();
         }
 
@@ -91,9 +85,7 @@ pub fn gen_sorted_data(
 
         for _ in 0..batch_size {
             array_builder
-                .append_datum(&Some(ScalarImpl::Int64(
-                    data_gen.generate(0).as_i64().unwrap(),
-                )))
+                .append_datum(&data_gen.generate_datum(0))
                 .unwrap();
         }
 
@@ -102,6 +94,39 @@ pub fn gen_sorted_data(
             vec![Column::new(Arc::new(array))],
             batch_size,
         ));
+    }
+
+    ret
+}
+
+/// Generate `batch_num` data chunks with type `Int64`, each data chunk has cardinality of
+/// `batch_size`. Then project each data chunk with `expr`.
+///
+/// NOTE: For convenience, here we only use data type `Int64`.
+pub fn gen_projected_data(
+    batch_size: usize,
+    batch_num: usize,
+    expr: BoxedExpression,
+) -> Vec<DataChunk> {
+    let mut data_gen =
+        FieldGeneratorImpl::with_random(DataType::Int64, None, None, None, None, SEED).unwrap();
+    let mut ret = Vec::<DataChunk>::with_capacity(batch_num);
+
+    for i in 0..batch_num {
+        let mut array_builder = DataType::Int64.create_array_builder(batch_size);
+
+        for j in 0..batch_size {
+            array_builder
+                .append_datum(&data_gen.generate_datum(((i + 1) * (j + 1)) as u64))
+                .unwrap();
+        }
+
+        let array = array_builder.finish().unwrap();
+        let chunk = DataChunk::new(vec![Column::new(Arc::new(array))], batch_size);
+
+        let array = expr.eval(&chunk).unwrap();
+        let chunk = DataChunk::new(vec![Column::new(array)], batch_size);
+        ret.push(chunk);
     }
 
     ret
