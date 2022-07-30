@@ -8,19 +8,19 @@ statement ok
 insert into t values ('aaa', 1, 1), ('bbb', 0, 2), ('ccc', 0, 5), ('ddd', 1, 4)
 
 query T
-select string_agg(v1 order by v1) from t
+select string_agg(v1, '' order by v1) from t
 ----
 aaabbbcccddd
 
 query T
-select string_agg(v1 order by v3) from t
+select string_agg(v1, ',' order by v3) from t
 ----
-aaabbbdddccc
+aaa,bbb,ddd,ccc
 
 query T
-select string_agg(v1 order by v2 asc, v3 desc) from t
+select string_agg(v1, v3::varchar order by v2 asc, v3 desc) from t
 ----
-cccbbbdddaaa
+ccc2bbb4ddd1aaa
 
 statement ok
 drop table t

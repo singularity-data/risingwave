@@ -444,10 +444,9 @@ impl LogicalAgg {
 
     /// Check if the aggregation result will be affected by order by clause, if any.
     pub(crate) fn is_agg_result_affected_by_order(&self) -> bool {
-        self.agg_calls.iter().any(|call| match call.agg_kind {
-            AggKind::StringAgg => !call.order_by_fields.is_empty(),
-            _ => false,
-        })
+        self.agg_calls
+            .iter()
+            .any(|call| matches!(call.agg_kind, AggKind::StringAgg))
     }
 }
 

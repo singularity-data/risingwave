@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use risingwave_common::array::*;
+use risingwave_common::ensure;
 use risingwave_common::error::{ErrorCode, Result};
 use risingwave_common::types::*;
 use risingwave_common::util::sort_util::{OrderPair, OrderType};
@@ -22,7 +23,9 @@ use risingwave_pb::expr::AggCall;
 use risingwave_pb::plan_common::OrderType as ProstOrderType;
 
 use super::string_agg::StringAgg;
-use crate::expr::{build_from_prost, AggKind, Expression, ExpressionRef, LiteralExpression};
+use crate::expr::{
+    build_from_prost, AggKind, Expression, ExpressionRef, InputRefExpression, LiteralExpression,
+};
 use crate::vector_op::agg::approx_count_distinct::ApproxCountDistinct;
 use crate::vector_op::agg::count_star::CountStar;
 use crate::vector_op::agg::functions::*;
@@ -54,11 +57,12 @@ pub trait Aggregator: Send + 'static {
 pub type BoxedAggState = Box<dyn Aggregator>;
 
 pub struct AggStateFactory {
+    agg_kind: AggKind,
+    return_type: DataType,
     // When agg func is count(*), the args is empty and input type is None.
     input_type: Option<DataType>,
     input_col_idx: usize,
-    agg_kind: AggKind,
-    return_type: DataType,
+    extra_arg: Option<ExpressionRef>,
     distinct: bool,
     order_pairs: Vec<OrderPair>,
     order_col_types: Vec<DataType>,
@@ -89,26 +93,13 @@ impl AggStateFactory {
             ),
         };
         match &prost.get_args()[..] {
-            [ref arg] => {
-                let input_type = DataType::from(arg.get_type()?);
-                let input_col_idx = arg.get_input()?.get_column_idx() as usize;
-                Ok(Self {
-                    input_type: Some(input_type),
-                    input_col_idx,
-                    agg_kind,
-                    return_type,
-                    distinct,
-                    order_pairs,
-                    order_col_types,
-                    filter,
-                })
-            }
             [] => match (&agg_kind, return_type.clone()) {
                 (AggKind::Count, DataType::Int64) => Ok(Self {
-                    input_type: None,
-                    input_col_idx: 0,
                     agg_kind,
                     return_type,
+                    input_type: None,
+                    input_col_idx: 0,
+                    extra_arg: None,
                     distinct,
                     order_pairs,
                     order_col_types,
@@ -120,9 +111,50 @@ impl AggStateFactory {
                 ))
                 .into()),
             },
-            _ => Err(ErrorCode::NotImplemented(
-                "Agg with more than 1 input not supported.".into(),
-                2868.into(),
+            [ref arg] if agg_kind != AggKind::StringAgg => {
+                let input_type = DataType::from(arg.get_type()?);
+                let input_col_idx = arg.get_input()?.get_column_idx() as usize;
+                Ok(Self {
+                    agg_kind,
+                    return_type,
+                    input_type: Some(input_type),
+                    input_col_idx,
+                    extra_arg: None,
+                    distinct,
+                    order_pairs,
+                    order_col_types,
+                    filter,
+                })
+            }
+            [ref agg_arg, ref extra_arg] if agg_kind == AggKind::StringAgg => {
+                let input_type = DataType::from(agg_arg.get_type()?);
+                let input_col_idx = agg_arg.get_input()?.get_column_idx() as usize;
+                let extra_arg_type = DataType::from(extra_arg.get_type()?);
+                ensure!(
+                    extra_arg_type == DataType::Varchar,
+                    ErrorCode::ExprError("Delimiter must be Varchar".into())
+                );
+                let extra_arg = Arc::from(
+                    InputRefExpression::new(
+                        extra_arg_type,
+                        extra_arg.get_input()?.get_column_idx() as usize,
+                    )
+                    .boxed(),
+                );
+                Ok(Self {
+                    agg_kind,
+                    return_type,
+                    input_type: Some(input_type),
+                    input_col_idx,
+                    extra_arg: Some(extra_arg),
+                    distinct,
+                    order_pairs,
+                    order_col_types,
+                    filter,
+                })
+            }
+            _ => Err(ErrorCode::ExprError(
+                format!("Too many/few arguments for {:?}", agg_kind).into(),
             )
             .into()),
         }
@@ -138,6 +170,7 @@ impl AggStateFactory {
         } else if let AggKind::StringAgg = self.agg_kind {
             Ok(Box::new(StringAgg::new(
                 self.input_col_idx,
+                self.extra_arg.clone().unwrap(),
                 self.order_pairs.clone(),
                 self.order_col_types.clone(),
             )))
