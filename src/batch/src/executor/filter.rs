@@ -87,10 +87,7 @@ impl BoxedExecutorBuilder for FilterExecutor {
     ) -> Result<BoxedExecutor> {
         ensure!(inputs.len() == 1);
 
-        let filter_node = try_match_expand!(
-            source.plan_node().get_node_body().unwrap(),
-            NodeBody::Filter
-        )?;
+        let filter_node = source.plan_node().get_node_body()?.as_filter().unwrap();
 
         let expr_node = filter_node.get_search_condition()?;
         let expr = build_from_prost(expr_node)?;

@@ -5,6 +5,7 @@ version = "0.1.11"
 
 [dependencies]
 bytes = "1"
+enum-as-inner = "0.5"
 pbjson = "0.3"
 prost = "0.10"
 prost-helpers = { path = "helpers" }

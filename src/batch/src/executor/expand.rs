@@ -87,10 +87,7 @@ impl BoxedExecutorBuilder for ExpandExecutor {
         mut inputs: Vec<BoxedExecutor>,
     ) -> Result<BoxedExecutor> {
         ensure!(inputs.len() == 1);
-        let expand_node = try_match_expand!(
-            source.plan_node().get_node_body().unwrap(),
-            NodeBody::Expand
-        )?;
+        let expand_node = source.plan_node().get_node_body()?.as_expand().unwrap();
 
         let column_subsets = expand_node
             .column_subsets

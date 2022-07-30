@@ -4708,6 +4708,7 @@ name = "risingwave_pb"
 version = "0.1.11"
 dependencies = [
  "bytes",
+ "enum-as-inner",
  "madsim-tonic",
  "madsim-tonic-build",
  "pbjson",

@@ -115,10 +115,7 @@ impl BoxedExecutorBuilder for DeleteExecutor {
         mut inputs: Vec<BoxedExecutor>,
     ) -> Result<BoxedExecutor> {
         ensure!(inputs.len() == 1, "Delete executor should have 1 child!");
-        let delete_node = try_match_expand!(
-            source.plan_node().get_node_body().unwrap(),
-            NodeBody::Delete
-        )?;
+        let delete_node = source.plan_node().get_node_body()?.as_delete().unwrap();
 
         let table_id = TableId::new(delete_node.table_source_id);
 

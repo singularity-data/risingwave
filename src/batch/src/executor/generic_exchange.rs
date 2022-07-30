@@ -98,10 +98,7 @@ impl BoxedExecutorBuilder for GenericExchangeExecutorBuilder {
             inputs.is_empty(),
             "Exchange executor should not have children!"
         );
-        let node = try_match_expand!(
-            source.plan_node().get_node_body().unwrap(),
-            NodeBody::Exchange
-        )?;
+        let node = source.plan_node().get_node_body()?.as_exchange().unwrap();
 
         ensure!(!node.get_sources().is_empty());
         let prost_sources: Vec<ProstExchangeSource> = node.get_sources().to_vec();

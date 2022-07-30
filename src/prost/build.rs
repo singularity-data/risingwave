@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(file_descriptor_set_path.as_path())
         .compile_well_known_types(true)
         .type_attribute(".", "#[derive(prost_helpers::AnyPB)]")
+        .type_attribute("node_body", "#[derive(enum_as_inner::EnumAsInner)]")
         .out_dir(out_dir.as_path())
         .compile(&protos, &[proto_dir.to_string()])
         .expect("Failed to compile grpc!");
