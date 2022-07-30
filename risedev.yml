@@ -91,6 +91,7 @@ risedev:
       persist-data: true
     - use: kafka
       persist-data: true
+    - use: jaeger
 
   full-benchmark:
     - use: minio
