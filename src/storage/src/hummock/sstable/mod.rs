@@ -38,8 +38,9 @@ use risingwave_hummock_sdk::HummockSstableId;
 #[cfg(test)]
 use risingwave_pb::hummock::{KeyRange, SstableInfo};
 
+mod sstable_id_manager;
 mod utils;
-
+pub use sstable_id_manager::*;
 pub use utils::CompressionAlgorithm;
 use utils::{get_length_prefixed_slice, put_length_prefixed_slice};
 

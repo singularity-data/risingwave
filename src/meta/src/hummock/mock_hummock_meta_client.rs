@@ -119,9 +119,9 @@ impl HummockMetaClient for MockHummockMetaClient {
             .map_err(mock_err)
     }
 
-    async fn get_new_table_id(&self) -> Result<HummockSstableId> {
+    async fn get_new_sst_ids(&self, number: u32) -> Result<Vec<HummockSstableId>> {
         self.hummock_manager
-            .get_new_table_id()
+            .get_new_sst_ids(number)
             .await
             .map_err(mock_err)
     }

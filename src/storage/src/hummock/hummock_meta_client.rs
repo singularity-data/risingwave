@@ -99,10 +99,10 @@ impl HummockMetaClient for MonitoredHummockMetaClient {
         unreachable!("Currently CNs should not call this function")
     }
 
-    async fn get_new_table_id(&self) -> Result<HummockSstableId> {
+    async fn get_new_sst_ids(&self, number: u32) -> Result<Vec<HummockSstableId>> {
         self.stats.get_new_table_id_counts.inc();
         let timer = self.stats.get_new_table_id_latency.start_timer();
-        let res = self.meta_client.get_new_table_id().await;
+        let res = self.meta_client.get_new_sst_ids(number).await;
         timer.observe_duration();
         res
     }

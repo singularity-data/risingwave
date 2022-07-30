@@ -156,6 +156,7 @@ pub async fn compute_node_serve(
                 Some(Arc::new(CompactionExecutor::new(Some(1)))),
                 table_id_to_slice_transform.clone(),
                 memory_limiter.clone(),
+                storage.sstable_id_manager(),
             );
             sub_tasks.push((handle, shutdown_sender));
         }

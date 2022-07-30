@@ -40,7 +40,7 @@ mod tests {
     use risingwave_storage::hummock::compaction_group_client::DummyCompactionGroupClient;
     use risingwave_storage::hummock::compactor::{Compactor, CompactorContext};
     use risingwave_storage::hummock::iterator::test_utils::mock_sstable_store;
-    use risingwave_storage::hummock::{HummockStorage, MemoryLimiter};
+    use risingwave_storage::hummock::{HummockStorage, MemoryLimiter, SstableIdManager};
     use risingwave_storage::monitor::{StateStoreMetrics, StoreLocalStatistic};
     use risingwave_storage::storage_value::StorageValue;
     use risingwave_storage::store::{ReadOptions, WriteOptions};
@@ -122,6 +122,10 @@ mod tests {
             compaction_executor: None,
             table_id_to_slice_transform: Arc::new(RwLock::new(HashMap::new())),
             memory_limiter: Arc::new(MemoryLimiter::new(1024 * 1024 * 128)),
+            sstable_id_manager: Arc::new(SstableIdManager::new(
+                hummock_meta_client.clone(),
+                storage.options().sstable_id_remote_fetch_number,
+            )),
         }
     }
 
@@ -333,21 +337,12 @@ mod tests {
     async fn test_compaction_drop_all_key() {
         let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
             setup_compute_env(8080).await;
-        let hummock_meta_client = Arc::new(MockHummockMetaClient::new(
+        let hummock_meta_client: Arc<dyn HummockMetaClient> = Arc::new(MockHummockMetaClient::new(
             hummock_manager_ref.clone(),
             worker_node.id,
         ));
         let storage = get_hummock_storage(hummock_meta_client.clone()).await;
-        let compact_ctx = CompactorContext {
-            options: storage.options().clone(),
-            sstable_store: storage.sstable_store(),
-            hummock_meta_client: hummock_meta_client.clone(),
-            stats: Arc::new(StateStoreMetrics::unused()),
-            is_share_buffer_compact: false,
-            compaction_executor: None,
-            table_id_to_slice_transform: Arc::new(RwLock::new(HashMap::new())),
-            memory_limiter: Arc::new(MemoryLimiter::new(1024 * 1024 * 128)),
-        };
+        let compact_ctx = get_compactor_context(&storage, &hummock_meta_client);
 
         // 1. add sstables
         let val = Bytes::from(b"0"[..].repeat(1 << 10)); // 1024 Byte value
@@ -435,21 +430,12 @@ mod tests {
     async fn test_compaction_drop_key_by_existing_table_id() {
         let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
             setup_compute_env(8080).await;
-        let hummock_meta_client = Arc::new(MockHummockMetaClient::new(
+        let hummock_meta_client: Arc<dyn HummockMetaClient> = Arc::new(MockHummockMetaClient::new(
             hummock_manager_ref.clone(),
             worker_node.id,
         ));
         let storage = get_hummock_storage(hummock_meta_client.clone()).await;
-        let compact_ctx = CompactorContext {
-            options: storage.options().clone(),
-            sstable_store: storage.sstable_store(),
-            hummock_meta_client: hummock_meta_client.clone(),
-            stats: Arc::new(StateStoreMetrics::unused()),
-            is_share_buffer_compact: false,
-            compaction_executor: None,
-            table_id_to_slice_transform: Arc::new(RwLock::new(HashMap::new())),
-            memory_limiter: Arc::new(MemoryLimiter::new(1024 * 1024 * 128)),
-        };
+        let compact_ctx = get_compactor_context(&storage, &hummock_meta_client);
 
         // 1. add sstables
         let val = Bytes::from(b"0"[..].repeat(1 << 10)); // 1024 Byte value
@@ -592,21 +578,12 @@ mod tests {
     async fn test_compaction_drop_key_by_ttl() {
         let (_env, hummock_manager_ref, _cluster_manager_ref, worker_node) =
             setup_compute_env(8080).await;
-        let hummock_meta_client = Arc::new(MockHummockMetaClient::new(
+        let hummock_meta_client: Arc<dyn HummockMetaClient> = Arc::new(MockHummockMetaClient::new(
             hummock_manager_ref.clone(),
             worker_node.id,
         ));
         let storage = get_hummock_storage(hummock_meta_client.clone()).await;
-        let compact_ctx = CompactorContext {
-            options: storage.options().clone(),
-            sstable_store: storage.sstable_store(),
-            hummock_meta_client: hummock_meta_client.clone(),
-            stats: Arc::new(StateStoreMetrics::unused()),
-            is_share_buffer_compact: false,
-            compaction_executor: None,
-            table_id_to_slice_transform: Arc::new(RwLock::new(HashMap::new())),
-            memory_limiter: Arc::new(MemoryLimiter::new(1024 * 1024 * 128)),
-        };
+        let compact_ctx = get_compactor_context(&storage, &hummock_meta_client);
 
         // 1. add sstables
         let val = Bytes::from(b"0"[..].to_vec()); // 1 Byte value

@@ -26,7 +26,7 @@ use crate::hummock::compaction_executor::CompactionExecutor;
 use crate::hummock::compactor::{Compactor, CompactorContext};
 use crate::hummock::conflict_detector::ConflictDetector;
 use crate::hummock::shared_buffer::OrderSortedUncommittedData;
-use crate::hummock::{HummockResult, MemoryLimiter, SstableStoreRef};
+use crate::hummock::{HummockResult, MemoryLimiter, SstableIdManagerRef, SstableStoreRef};
 use crate::monitor::StateStoreMetrics;
 
 pub(crate) type UploadTaskPayload = OrderSortedUncommittedData;
@@ -52,6 +52,7 @@ impl SharedBufferUploader {
         stats: Arc<StateStoreMetrics>,
         write_conflict_detector: Option<Arc<ConflictDetector>>,
         table_id_to_slice_transform: Arc<RwLock<HashMap<u32, SliceTransformImpl>>>,
+        sstable_id_manager: SstableIdManagerRef,
     ) -> Self {
         let compaction_executor = if options.share_buffer_compaction_worker_threads_number == 0 {
             None
@@ -71,6 +72,7 @@ impl SharedBufferUploader {
             compaction_executor: compaction_executor.as_ref().cloned(),
             table_id_to_slice_transform: table_id_to_slice_transform.clone(),
             memory_limiter: memory_limiter.clone(),
+            sstable_id_manager: sstable_id_manager.clone(),
         });
         let remote_object_store_compactor_context = Arc::new(CompactorContext {
             options: options.clone(),
@@ -81,6 +83,7 @@ impl SharedBufferUploader {
             compaction_executor: compaction_executor.as_ref().cloned(),
             table_id_to_slice_transform,
             memory_limiter,
+            sstable_id_manager,
         });
         Self {
             options,

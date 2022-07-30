@@ -156,24 +156,19 @@ mod tests {
     use crate::hummock::{CompactorManager, HummockManager};
     use crate::storage::MetaStore;
 
-    async fn add_compact_task<S>(
-        hummock_manager_ref: &HummockManager<S>,
-        _context_id: u32,
-        epoch: u64,
-    ) where
+    async fn add_compact_task<S>(hummock_manager: &HummockManager<S>, _context_id: u32, epoch: u64)
+    where
         S: MetaStore,
     {
-        let original_tables = generate_test_tables(
-            epoch,
-            vec![hummock_manager_ref.get_new_table_id().await.unwrap()],
-        );
+        let original_tables =
+            generate_test_tables(epoch, hummock_manager.get_new_sst_ids(1).await.unwrap());
         register_sstable_infos_to_compaction_group(
-            hummock_manager_ref.compaction_group_manager_ref_for_test(),
+            hummock_manager.compaction_group_manager_ref_for_test(),
             &original_tables,
             StaticCompactionGroupId::StateDefault.into(),
         )
         .await;
-        hummock_manager_ref
+        hummock_manager
             .commit_epoch(epoch, to_local_sstable_info(&original_tables))
             .await
             .unwrap();

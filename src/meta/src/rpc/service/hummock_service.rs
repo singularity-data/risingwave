@@ -181,15 +181,18 @@ where
         Ok(Response::new(UnpinSnapshotBeforeResponse { status: None }))
     }
 
-    async fn get_new_table_id(
+    async fn get_new_sst_ids(
         &self,
-        _request: Request<GetNewTableIdRequest>,
-    ) -> Result<Response<GetNewTableIdResponse>, Status> {
-        let result = self.hummock_manager.get_new_table_id().await;
+        request: Request<GetNewSstIdsRequest>,
+    ) -> Result<Response<GetNewSstIdsResponse>, Status> {
+        let result = self
+            .hummock_manager
+            .get_new_sst_ids(request.into_inner().number)
+            .await;
         match result {
-            Ok(table_id) => Ok(Response::new(GetNewTableIdResponse {
+            Ok(sst_ids) => Ok(Response::new(GetNewSstIdsResponse {
                 status: None,
-                table_id,
+                table_id: sst_ids,
             })),
             Err(e) => Err(tonic_err(e)),
         }

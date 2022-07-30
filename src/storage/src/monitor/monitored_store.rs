@@ -24,7 +24,7 @@ use super::StateStoreMetrics;
 use crate::error::StorageResult;
 use crate::hummock::local_version_manager::LocalVersionManager;
 use crate::hummock::sstable_store::SstableStoreRef;
-use crate::hummock::HummockStorage;
+use crate::hummock::{HummockStorage, SstableIdManagerRef};
 use crate::storage_value::StorageValue;
 use crate::store::*;
 use crate::{define_state_store_associated_type, StateStore, StateStoreIter};
@@ -274,6 +274,10 @@ impl MonitoredStateStore<HummockStorage> {
 
     pub fn local_version_manager(&self) -> Arc<LocalVersionManager> {
         self.inner.local_version_manager().clone()
+    }
+
+    pub fn sstable_id_manager(&self) -> SstableIdManagerRef {
+        self.inner.sstable_id_manager().clone()
     }
 }
 

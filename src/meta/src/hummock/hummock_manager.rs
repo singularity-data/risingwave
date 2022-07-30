@@ -1074,17 +1074,19 @@ where
         Ok(())
     }
 
-    pub async fn get_new_table_id(&self) -> Result<HummockSstableId> {
-        // TODO #4037: refactor `get_new_table_id`
-        let sstable_id = get_remote_sst_id(
-            self.env
-                .id_gen_manager()
-                .generate::<{ IdCategory::HummockSstableId }>()
-                .await
-                .map(|id| id as HummockSstableId)?,
-        );
+    pub async fn get_new_sst_ids(&self, number: u32) -> Result<Vec<HummockSstableId>> {
+        // TODO: refactor id generator to u64
+        let start_id = self
+            .env
+            .id_gen_manager()
+            .generate_interval::<{ IdCategory::HummockSstableId }>(number as i32)
+            .await
+            .map(|id| id as HummockSstableId)?;
 
-        Ok(sstable_id)
+        Ok((start_id..start_id + number as HummockSstableId)
+            .into_iter()
+            .map(get_remote_sst_id)
+            .collect_vec())
     }
 
     /// Release resources pinned by these contexts, including:

@@ -51,11 +51,7 @@ where
 {
     // Increase version by 2.
     let mut epoch: u64 = 1;
-    let table_ids = vec![
-        hummock_manager.get_new_table_id().await.unwrap(),
-        hummock_manager.get_new_table_id().await.unwrap(),
-        hummock_manager.get_new_table_id().await.unwrap(),
-    ];
+    let table_ids = hummock_manager.get_new_sst_ids(3).await.unwrap();
     let test_tables = generate_test_tables(epoch, table_ids);
     register_sstable_infos_to_compaction_group(
         hummock_manager.compaction_group_manager_ref_for_test(),
@@ -79,10 +75,8 @@ where
         .assign_compaction_task(&compact_task, context_id, async { true })
         .await
         .unwrap();
-    let test_tables_2 = generate_test_tables(
-        epoch,
-        vec![hummock_manager.get_new_table_id().await.unwrap()],
-    );
+    let test_tables_2 =
+        generate_test_tables(epoch, hummock_manager.get_new_sst_ids(1).await.unwrap());
     register_sstable_infos_to_compaction_group(
         hummock_manager.compaction_group_manager_ref_for_test(),
         &test_tables_2,
@@ -99,10 +93,8 @@ where
 
     // Increase version by 1.
     epoch += 1;
-    let test_tables_3 = generate_test_tables(
-        epoch,
-        vec![hummock_manager.get_new_table_id().await.unwrap()],
-    );
+    let test_tables_3 =
+        generate_test_tables(epoch, hummock_manager.get_new_sst_ids(1).await.unwrap());
     register_sstable_infos_to_compaction_group(
         hummock_manager.compaction_group_manager_ref_for_test(),
         &test_tables_3,
@@ -263,18 +255,4 @@ pub async fn setup_compute_env(
         .await
         .unwrap();
     (env, hummock_manager, cluster_manager, worker_node)
-}
-
-pub async fn get_sst_ids<S>(
-    hummock_manager: &HummockManager<S>,
-    number: usize,
-) -> Vec<HummockSstableId>
-where
-    S: MetaStore,
-{
-    let mut ret = vec![];
-    for _ in 0..number {
-        ret.push(hummock_manager.get_new_table_id().await.unwrap());
-    }
-    ret
 }

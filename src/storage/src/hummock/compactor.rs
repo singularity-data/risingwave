@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
 use dyn_clone::DynClone;
-use futures::future::{try_join_all, BoxFuture};
+use futures::future::try_join_all;
 use futures::{stream, FutureExt, StreamExt, TryFutureExt};
 use itertools::Itertools;
 use parking_lot::RwLock;
@@ -33,7 +33,7 @@ use risingwave_hummock_sdk::key::{
 };
 use risingwave_hummock_sdk::key_range::KeyRange;
 use risingwave_hummock_sdk::slice_transform::SliceTransformImpl;
-use risingwave_hummock_sdk::{CompactionGroupId, HummockSstableId, VersionedComparator};
+use risingwave_hummock_sdk::{CompactionGroupId, VersionedComparator};
 use risingwave_pb::hummock::{
     CompactTask, LevelType, SstableInfo, SubscribeCompactTasksResponse, VacuumTask,
 };
@@ -59,14 +59,11 @@ use crate::hummock::sstable_store::SstableStoreRef;
 use crate::hummock::state_store::ForwardIter;
 use crate::hummock::utils::{can_concat, MemoryLimiter, MemoryTracker};
 use crate::hummock::vacuum::Vacuum;
-use crate::hummock::{CachePolicy, HummockError};
+use crate::hummock::{CachePolicy, HummockError, SstableIdManagerRef};
 use crate::monitor::{StateStoreMetrics, StoreLocalStatistic};
 
-pub type SstableIdGenerator =
-    Arc<dyn Fn() -> BoxFuture<'static, HummockResult<HummockSstableId>> + Send + Sync>;
-
 pub struct RemoteBuilderFactory {
-    meta_client: Arc<dyn HummockMetaClient>,
+    sstable_id_manager: SstableIdManagerRef,
     limiter: Arc<MemoryLimiter>,
     options: SstableBuilderOptions,
     remote_rpc_cost: Arc<AtomicU64>,
@@ -76,11 +73,7 @@ pub struct RemoteBuilderFactory {
 impl TableBuilderFactory for RemoteBuilderFactory {
     async fn open_builder(&self) -> HummockResult<(MemoryTracker, SstableBuilder)> {
         let timer = Instant::now();
-        let table_id = self
-            .meta_client
-            .get_new_table_id()
-            .await
-            .map_err(HummockError::meta_error)?;
+        let table_id = self.sstable_id_manager.get_next_sst_id().await?;
         let cost = (timer.elapsed().as_secs_f64() * 1000000.0).round() as u64;
         self.remote_rpc_cost.fetch_add(cost, Ordering::Relaxed);
         let tracker = self
@@ -116,6 +109,8 @@ pub struct CompactorContext {
     pub table_id_to_slice_transform: Arc<RwLock<HashMap<u32, SliceTransformImpl>>>,
 
     pub memory_limiter: Arc<MemoryLimiter>,
+
+    pub sstable_id_manager: SstableIdManagerRef,
 }
 
 trait CompactionFilter: Send + DynClone {
@@ -695,7 +690,7 @@ impl Compactor {
             _ => CompressionAlgorithm::Zstd,
         };
         let builder_factory = RemoteBuilderFactory {
-            meta_client: self.context.hummock_meta_client.clone(),
+            sstable_id_manager: self.context.sstable_id_manager.clone(),
             limiter: self.context.memory_limiter.clone(),
             options,
             remote_rpc_cost: get_id_time.clone(),
@@ -879,6 +874,7 @@ impl Compactor {
         compaction_executor: Option<Arc<CompactionExecutor>>,
         table_id_to_slice_transform: Arc<RwLock<HashMap<u32, SliceTransformImpl>>>,
         memory_limiter: Arc<MemoryLimiter>,
+        sstable_id_manager: SstableIdManagerRef,
     ) -> (JoinHandle<()>, Sender<()>) {
         let compactor_context = Arc::new(CompactorContext {
             options,
@@ -889,6 +885,7 @@ impl Compactor {
             compaction_executor,
             table_id_to_slice_transform,
             memory_limiter,
+            sstable_id_manager,
         });
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
         let stream_retry_interval = Duration::from_secs(60);

@@ -171,6 +171,10 @@ pub struct StorageConfig {
     /// Capacity of sstable meta cache.
     #[serde(default = "default::compactor_memory_limit_mb")]
     pub compactor_memory_limit_mb: usize,
+
+    /// Number of SST ids fetched from meta per RPC
+    #[serde(default = "default::sstable_id_remote_fetch_number")]
+    pub sstable_id_remote_fetch_number: u32,
 }
 
 impl Default for StorageConfig {
@@ -296,6 +300,10 @@ mod default {
 
     pub fn compactor_memory_limit_mb() -> usize {
         512
+    }
+
+    pub fn sstable_id_remote_fetch_number() -> u32 {
+        10
     }
 }
 
