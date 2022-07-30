@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use fail::fail_point;
@@ -26,7 +27,7 @@ use crate::object::{BlockLocation, ObjectMetadata, ObjectStore};
 /// In-memory object storage, useful for testing.
 #[derive(Default)]
 pub struct InMemObjectStore {
-    objects: Mutex<HashMap<String, Bytes>>,
+    objects: Mutex<HashMap<String, (ObjectMetadata, Bytes)>>,
 }
 
 #[async_trait::async_trait]
@@ -38,7 +39,18 @@ impl ObjectStore for InMemObjectStore {
         if obj.is_empty() {
             Err(ObjectError::internal("upload empty object"))
         } else {
-            self.objects.lock().await.insert(path.into(), obj);
+            let metadata = ObjectMetadata {
+                key: path.to_owned(),
+                last_modified: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(ObjectError::internal)?
+                    .as_secs_f64(),
+                total_size: obj.len(),
+            };
+            self.objects
+                .lock()
+                .await
+                .insert(path.into(), (metadata, obj));
             Ok(())
         }
     }
@@ -63,8 +75,13 @@ impl ObjectStore for InMemObjectStore {
     }
 
     async fn metadata(&self, path: &str) -> ObjectResult<ObjectMetadata> {
-        let total_size = self.get_object(path, |v| v.len()).await?;
-        Ok(ObjectMetadata { total_size })
+        self.objects
+            .lock()
+            .await
+            .get(path)
+            .map(|(metadata, _)| metadata)
+            .cloned()
+            .ok_or_else(|| ObjectError::internal(format!("no object at path '{}'", path)))
     }
 
     async fn delete(&self, path: &str) -> ObjectResult<()> {
@@ -73,6 +90,22 @@ impl ObjectStore for InMemObjectStore {
         )));
         self.objects.lock().await.remove(path);
         Ok(())
+    }
+
+    async fn list(&self, prefix: &str) -> ObjectResult<Vec<ObjectMetadata>> {
+        Ok(self
+            .objects
+            .lock()
+            .await
+            .iter()
+            .filter_map(|(path, (metadata, _))| {
+                if path.starts_with(prefix) {
+                    return Some(metadata.clone());
+                }
+                None
+            })
+            .sorted_by(|a, b| Ord::cmp(&a.key, &b.key))
+            .collect_vec())
     }
 }
 
@@ -91,6 +124,7 @@ impl InMemObjectStore {
             .lock()
             .await
             .get(path)
+            .map(|(_, obj)| obj)
             .ok_or_else(|| ObjectError::internal(format!("no object at path '{}'", path)))
             .map(f)
     }
@@ -107,6 +141,7 @@ fn find_block(obj: &Bytes, block: BlockLocation) -> ObjectResult<Bytes> {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use itertools::enumerate;
 
     use super::*;
 
@@ -150,5 +185,42 @@ mod tests {
 
         let metadata = obj_store.metadata("/abc").await.unwrap();
         assert_eq!(metadata.total_size, 6);
+    }
+
+    #[tokio::test]
+    async fn test_list() {
+        let payload = Bytes::from("123456");
+        let store = InMemObjectStore::new();
+        assert!(store.list("").await.unwrap().is_empty());
+
+        let paths = vec!["001/002/test.obj", "001/003/test.obj"];
+        for (i, path) in enumerate(paths.clone()) {
+            assert_eq!(store.list("").await.unwrap().len(), i);
+            store.upload(path, payload.clone()).await.unwrap();
+            assert_eq!(store.list("").await.unwrap().len(), i + 1);
+        }
+
+        let list_path = store
+            .list("")
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| p.key.clone())
+            .collect_vec();
+        assert_eq!(list_path, paths);
+
+        for i in 0..=5 {
+            assert_eq!(store.list(&paths[0][0..=i]).await.unwrap().len(), 2);
+        }
+        for i in 6..=paths[0].len() - 1 {
+            assert_eq!(store.list(&paths[0][0..=i]).await.unwrap().len(), 1);
+        }
+        assert!(store.list("003").await.unwrap().is_empty());
+
+        for (i, path) in enumerate(paths.clone()) {
+            assert_eq!(store.list("").await.unwrap().len(), paths.len() - i);
+            store.delete(path).await.unwrap();
+            assert_eq!(store.list("").await.unwrap().len(), paths.len() - i - 1);
+        }
     }
 }
