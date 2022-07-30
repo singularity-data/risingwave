@@ -20,7 +20,7 @@ use itertools::Itertools;
 use parking_lot::lock_api::ArcRwLockReadGuard;
 use parking_lot::{RawRwLock, RwLock};
 use risingwave_hummock_sdk::compaction_group::hummock_version_ext::HummockVersionExt;
-use risingwave_hummock_sdk::{CompactionGroupId, HummockEpoch, HummockVersionId};
+use risingwave_hummock_sdk::{CompactionGroupId, HummockEpoch, HummockSSTableId, HummockVersionId};
 use risingwave_pb::hummock::{HummockVersion, Level};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -28,6 +28,7 @@ use super::shared_buffer::SharedBuffer;
 
 #[derive(Debug, Clone)]
 pub struct LocalVersion {
+    pub uploaded_sst_ids: BTreeMap<HummockEpoch, Vec<HummockSSTableId>>,
     shared_buffer: BTreeMap<HummockEpoch, Arc<RwLock<SharedBuffer>>>,
     pinned_version: Arc<PinnedVersion>,
     pub version_ids_in_use: BTreeSet<HummockVersionId>,
@@ -41,6 +42,7 @@ impl LocalVersion {
         let mut version_ids_in_use = BTreeSet::new();
         version_ids_in_use.insert(version.id);
         Self {
+            uploaded_sst_ids: BTreeMap::default(),
             shared_buffer: BTreeMap::default(),
             pinned_version: Arc::new(PinnedVersion::new(version, unpin_worker_tx)),
             version_ids_in_use,

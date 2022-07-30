@@ -535,6 +535,15 @@ impl LocalVersionManager {
             .flush(epoch, is_local, task_payload)
             .await;
 
+        if let Ok(ref ssts) = task_result {
+            let mut local_version_guard = self.local_version.write();
+            local_version_guard
+                .uploaded_sst_ids
+                .entry(epoch)
+                .or_default()
+                .extend(ssts.iter().map(|(_, sstable_info)| sstable_info.id));
+        }
+
         let local_version_guard = self.local_version.read();
         let mut shared_buffer_guard = local_version_guard
             .get_shared_buffer(epoch)
