@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 async-trait = "0.1"
+
+aws-config = { version = "0.15", default-features = false, features = ["rt-tokio", "native-tls"] }
+aws-sdk-s3 = { version = "0.15", default-features = false, features = ["rt-tokio", "native-tls"] }
+aws-smithy-http = "0.45"
 bytes = "1"
 bytesize = { version = "1", features = ["serde"] }
 clap = { version = "3", features = ["derive"] }
@@ -36,6 +40,7 @@ tokio = { version = "=0.2.0-alpha.5", package = "madsim-tokio", features = [
     "time",
     "signal",
 ] }
+tokio-stream = "0.1"
 toml = "0.5"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
@@ -43,3 +48,8 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 [[bin]]
 name = "file-cache-bench"
 path = "file_cache_bench/main.rs"
+
+[[bin]]
+name = "s3-bench"
+path = "s3_bench/main.rs"
+
