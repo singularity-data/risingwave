@@ -188,10 +188,8 @@ impl ToStream for LogicalExpand {
         Ok((expand.into(), out_col_change))
     }
 
-    fn to_stream(&self) -> Result<PlanRef> {
-        let new_input = self.input().to_stream()?;
-        let new_logical = self.clone_with_input(new_input);
-        Ok(StreamExpand::new(new_logical).into())
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
+        todo!() // TODO(kaige):
     }
 }
 

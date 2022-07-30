@@ -209,9 +209,9 @@ impl ToBatch for LogicalTopN {
 }
 
 impl ToStream for LogicalTopN {
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         // Unlike `BatchTopN`, `StreamTopN` cannot guarantee the output order
-        let input = self
+        let (new_input, input_col_change) = self
             .input()
             .to_stream_with_dist_required(&RequiredDist::single())?;
 
@@ -220,7 +220,9 @@ impl ToStream for LogicalTopN {
                 "Doesn't support OFFSET without LIMIT".to_string(),
             )));
         }
-        Ok(StreamTopN::new(self.clone_with_input(input)).into())
+
+        let (top_n, out_col_change) = self.rewrite_with_input(new_input, input_col_change);
+        Ok((StreamTopN::new(top_n).into(), out_col_change))
     }
 
     fn logical_rewrite_for_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {

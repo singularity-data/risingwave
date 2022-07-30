@@ -24,7 +24,7 @@ use super::{
 };
 use crate::catalog::TableId;
 use crate::expr::ExprImpl;
-use crate::utils::Condition;
+use crate::utils::{ColIndexMapping, Condition};
 
 /// [`LogicalUpdate`] iterates on input relation, set some columns, and inject update records into
 /// specified table.
@@ -135,7 +135,7 @@ impl ToBatch for LogicalUpdate {
 }
 
 impl ToStream for LogicalUpdate {
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         unreachable!("update should always be converted to batch plan");
     }
 

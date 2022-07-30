@@ -173,10 +173,10 @@ impl ToBatch for LogicalFilter {
 }
 
 impl ToStream for LogicalFilter {
-    fn to_stream(&self) -> Result<PlanRef> {
-        let new_input = self.input().to_stream()?;
-        let new_logical = self.clone_with_input(new_input);
-        Ok(StreamFilter::new(new_logical).into())
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
+        let (new_input, input_col_change) = self.input().to_stream()?;
+        let (filter, out_col_change) = self.rewrite_with_input(new_input, input_col_change);
+        Ok((StreamFilter::new(filter).into(), out_col_change))
     }
 
     fn logical_rewrite_for_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {

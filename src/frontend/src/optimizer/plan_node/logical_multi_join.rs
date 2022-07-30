@@ -457,7 +457,7 @@ impl ToStream for LogicalMultiJoin {
         )
     }
 
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         panic!(
             "Method not available for `LogicalMultiJoin` which is a placeholder node with \
              a temporary lifetime. It only facilitates join reordering during logical planning."

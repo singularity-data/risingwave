@@ -110,8 +110,11 @@ impl ToBatch for LogicalSource {
 }
 
 impl ToStream for LogicalSource {
-    fn to_stream(&self) -> Result<PlanRef> {
-        Ok(StreamSource::new(self.clone()).into())
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
+        Ok((
+            StreamSource::new(self.clone()).into(),
+            ColIndexMapping::identity(self.schema().len()),
+        ))
     }
 
     fn logical_rewrite_for_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {

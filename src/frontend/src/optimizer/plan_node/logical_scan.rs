@@ -332,6 +332,45 @@ impl LogicalScan {
             self.predicate.clone(),
         )
     }
+
+    fn rewrite_for_stream(&self) -> Result<(Self, ColIndexMapping)> {
+        if self.is_sys_table {
+            return Err(RwError::from(ErrorCode::NotImplemented(
+                "streaming on system table is not allowed".to_string(),
+                None.into(),
+            )));
+        }
+        match self.base.pk_indices.is_empty() {
+            true => {
+                let mut col_ids = HashSet::new();
+
+                for idx in &self.output_col_idx {
+                    col_ids.insert(self.table_desc.columns[*idx].column_id);
+                }
+                let col_need_to_add = self
+                    .table_desc
+                    .order_key
+                    .iter()
+                    .filter_map(|c| {
+                        if !col_ids.contains(&self.table_desc().columns[c.column_idx].column_id) {
+                            Some(c.column_idx)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect_vec();
+
+                let mut output_col_idx = self.output_col_idx.clone();
+                output_col_idx.extend(col_need_to_add);
+                let new_len = output_col_idx.len();
+                Ok((
+                    self.clone_with_output_indices(output_col_idx),
+                    ColIndexMapping::identity_or_none(self.schema().len(), new_len),
+                ))
+            }
+            false => Ok((self.clone(), ColIndexMapping::identity(self.schema().len()))),
+        }
+    }
 }
 
 impl_plan_tree_node_for_leaf! {LogicalScan}
@@ -436,15 +475,17 @@ impl ToBatch for LogicalScan {
 }
 
 impl ToStream for LogicalScan {
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         if self.is_sys_table {
             return Err(RwError::from(ErrorCode::NotImplemented(
                 "streaming on system table is not allowed".to_string(),
                 None.into(),
             )));
         }
-        if self.predicate.always_true() {
-            Ok(StreamTableScan::new(self.clone()).into())
+
+        let (scan, out_col_change) = self.rewrite_for_stream()?;
+        if scan.predicate.always_true() {
+            Ok((StreamTableScan::new(scan).into(), out_col_change))
         } else {
             let (scan, predicate, project_expr) = self.predicate_pull_up();
             let mut plan = LogicalFilter::create(scan.into(), predicate);
@@ -456,44 +497,6 @@ impl ToStream for LogicalScan {
     }
 
     fn logical_rewrite_for_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
-        if self.is_sys_table {
-            return Err(RwError::from(ErrorCode::NotImplemented(
-                "streaming on system table is not allowed".to_string(),
-                None.into(),
-            )));
-        }
-        match self.base.pk_indices.is_empty() {
-            true => {
-                let mut col_ids = HashSet::new();
-
-                for idx in &self.output_col_idx {
-                    col_ids.insert(self.table_desc.columns[*idx].column_id);
-                }
-                let col_need_to_add = self
-                    .table_desc
-                    .order_key
-                    .iter()
-                    .filter_map(|c| {
-                        if !col_ids.contains(&self.table_desc().columns[c.column_idx].column_id) {
-                            Some(c.column_idx)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect_vec();
-
-                let mut output_col_idx = self.output_col_idx.clone();
-                output_col_idx.extend(col_need_to_add);
-                let new_len = output_col_idx.len();
-                Ok((
-                    self.clone_with_output_indices(output_col_idx).into(),
-                    ColIndexMapping::identity_or_none(self.schema().len(), new_len),
-                ))
-            }
-            false => Ok((
-                self.clone().into(),
-                ColIndexMapping::identity(self.schema().len()),
-            )),
-        }
+        panic!()
     }
 }

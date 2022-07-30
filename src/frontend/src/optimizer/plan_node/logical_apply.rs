@@ -193,7 +193,7 @@ impl ToBatch for LogicalApply {
 }
 
 impl ToStream for LogicalApply {
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         Err(RwError::from(ErrorCode::InternalError(
             "LogicalApply should be unnested".to_string(),
         )))

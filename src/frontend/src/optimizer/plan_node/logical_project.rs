@@ -357,7 +357,10 @@ impl ToBatch for LogicalProject {
 }
 
 impl ToStream for LogicalProject {
-    fn to_stream_with_dist_required(&self, required_dist: &RequiredDist) -> Result<PlanRef> {
+    fn to_stream_with_dist_required(
+        &self,
+        required_dist: &RequiredDist,
+    ) -> Result<(PlanRef, ColIndexMapping)> {
         let input_required = if required_dist.satisfies(&RequiredDist::AnyShard) {
             RequiredDist::Any
         } else {
@@ -372,28 +375,40 @@ impl ToStream for LogicalProject {
                 _ => input_required,
             }
         };
-        let new_input = self.input().to_stream_with_dist_required(&input_required)?;
-        let new_logical = self.clone_with_input(new_input.clone());
-        let stream_plan = if let Some(input_proj) = new_input.as_stream_project() {
-            let outer_project = new_logical;
-            let inner_project = input_proj.as_logical();
-            let mut subst = Substitute {
-                mapping: inner_project.exprs().clone(),
-            };
-            let exprs = outer_project
-                .exprs()
+
+        let (new_input, input_col_change) =
+            self.input().to_stream_with_dist_required(&input_required)?;
+        let (proj, out_col_change) = self.rewrite_with_input(new_input.clone(), input_col_change);
+
+        // Add missing columns of input_pk into the select list.
+        let input_pk = new_input.pk_indices();
+        let i2o = Self::i2o_col_mapping_inner(new_input.schema().len(), proj.exprs());
+        let col_need_to_add = input_pk.iter().cloned().filter(|i| i2o.try_map(*i) == None);
+        let input_schema = new_input.schema();
+        let exprs =
+            proj.exprs()
                 .iter()
                 .cloned()
-                .map(|expr| subst.rewrite_expr(expr))
+                .chain(col_need_to_add.map(|idx| {
+                    InputRef::new(idx, input_schema.fields[idx].data_type.clone()).into()
+                }))
                 .collect();
-            StreamProject::new(LogicalProject::new(inner_project.input(), exprs))
-        } else {
-            StreamProject::new(new_logical)
-        };
-        required_dist.enforce_if_not_satisfies(stream_plan.into(), &Order::any())
+        let proj = Self::new(new_input, exprs);
+        // The added columns is at the end, so it will not change existing column indices.
+        // But the target size of `out_col_change` should be the same as the length of the new
+        // schema.
+        let (map, _) = out_col_change.into_parts();
+        let out_col_change = ColIndexMapping::with_target_size(map, proj.base.schema.len());
+
+        let new_logical = self.clone_with_input(new_input.clone());
+        Ok((
+            required_dist
+                .enforce_if_not_satisfies(StreamProject::new(new_logical).into(), &Order::any())?,
+            out_col_change,
+        ))
     }
 
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         self.to_stream_with_dist_required(&RequiredDist::Any)
     }
 

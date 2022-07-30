@@ -40,12 +40,20 @@ pub trait ToStream {
     fn logical_rewrite_for_stream(&self) -> Result<(PlanRef, ColIndexMapping)>;
 
     /// `to_stream` is equivalent to `to_stream_with_dist_required(RequiredDist::Any)`
-    fn to_stream(&self) -> Result<PlanRef>;
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)>;
 
     /// convert the plan to streaming physical plan and satisfy the required distribution
-    fn to_stream_with_dist_required(&self, required_dist: &RequiredDist) -> Result<PlanRef> {
-        let ret = self.to_stream()?;
-        required_dist.enforce_if_not_satisfies(ret, &Order::any())
+    fn to_stream_with_dist_required(
+        &self,
+        required_dist: &RequiredDist,
+    ) -> Result<(PlanRef, ColIndexMapping)> {
+        let (ret, mapping) = self.to_stream()?;
+        Ok((
+            mapping
+                .rewrite_required_distribution(&required_dist)
+                .enforce_if_not_satisfies(ret, &Order::any())?,
+            mapping,
+        ))
     }
 }
 
@@ -128,7 +136,7 @@ macro_rules! impl_to_stream {
     ([], $( { $convention:ident, $name:ident }),*) => {
         paste!{
             $(impl ToStream for [<$convention $name>] {
-                fn to_stream(&self) -> Result<PlanRef>{
+                fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)>{
                     panic!("converting to stream is only allowed on logical plan")
                 }
                 fn logical_rewrite_for_stream(&self) -> Result<(PlanRef, ColIndexMapping)>{

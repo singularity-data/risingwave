@@ -23,7 +23,7 @@ use super::{
     PredicatePushdown, ToBatch, ToStream,
 };
 use crate::catalog::TableId;
-use crate::utils::Condition;
+use crate::utils::{ColIndexMapping, Condition};
 
 /// `LogicalInsert` iterates on input relation and insert the data into specified table.
 ///
@@ -108,7 +108,7 @@ impl ToBatch for LogicalInsert {
 }
 
 impl ToStream for LogicalInsert {
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         unreachable!("insert should always be converted to batch plan");
     }
 

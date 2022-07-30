@@ -23,7 +23,7 @@ use super::{
     PredicatePushdown, ToBatch, ToStream,
 };
 use crate::catalog::TableId;
-use crate::utils::Condition;
+use crate::utils::{ColIndexMapping, Condition};
 
 /// [`LogicalDelete`] iterates on input relation and delete the data from specified table.
 ///
@@ -108,7 +108,7 @@ impl ToBatch for LogicalDelete {
 }
 
 impl ToStream for LogicalDelete {
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         unreachable!("delete should always be converted to batch plan");
     }
 

@@ -21,7 +21,7 @@ use super::{ColPrunable, LogicalFilter, PlanBase, PlanRef, PredicatePushdown, To
 use crate::expr::{Expr, TableFunction};
 use crate::optimizer::plan_node::BatchTableFunction;
 use crate::session::OptimizerContextRef;
-use crate::utils::Condition;
+use crate::utils::{ColIndexMapping, Condition};
 
 /// `LogicalGenerateSeries` implements Hop Table Function.
 #[derive(Debug, Clone)]
@@ -76,7 +76,7 @@ impl ToBatch for LogicalTableFunction {
 }
 
 impl ToStream for LogicalTableFunction {
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         Err(
             ErrorCode::NotImplemented("LogicalTableFunction::to_stream".to_string(), None.into())
                 .into(),

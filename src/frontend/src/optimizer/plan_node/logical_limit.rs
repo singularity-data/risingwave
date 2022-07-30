@@ -110,7 +110,7 @@ impl ToBatch for LogicalLimit {
 }
 
 impl ToStream for LogicalLimit {
-    fn to_stream(&self) -> Result<PlanRef> {
+    fn to_stream(&self) -> Result<(PlanRef, ColIndexMapping)> {
         Err(RwError::from(ErrorCode::NotImplemented(
             "there is no limit stream operator".to_string(),
             None.into(),
