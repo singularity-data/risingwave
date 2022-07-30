@@ -104,6 +104,18 @@ impl SstableIterator {
 
         Ok(())
     }
+
+    pub async fn next_inner(&mut self) -> HummockResult<()> {
+        self.stats.scan_key_count += 1;
+        let block_iter = self.block_iter.as_mut().expect("no block iter");
+        block_iter.next();
+        if block_iter.is_valid() {
+            Ok(())
+        } else {
+            // seek to next block
+            self.seek_idx(self.cur_idx + 1, None).await
+        }
+    }
 }
 
 impl HummockIterator for SstableIterator {

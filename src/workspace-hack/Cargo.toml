@@ -21,7 +21,7 @@ bstr = { version = "0.2", features = ["lazy_static", "regex-automata", "serde", 
 bytes = { version = "1", features = ["serde", "std"] }
 chrono = { version = "0.4", features = ["clock", "libc", "oldtime", "std", "time", "winapi"] }
 clap = { version = "3", features = ["atty", "clap_derive", "color", "derive", "env", "once_cell", "std", "strsim", "suggestions", "termcolor"] }
-criterion = { version = "0.3", features = ["async", "async_tokio", "cargo_bench_support", "futures", "tokio"] }
+criterion = { version = "0.3", features = ["async", "async_futures", "async_tokio", "cargo_bench_support", "futures", "tokio"] }
 crossbeam-deque = { version = "0.8", features = ["crossbeam-epoch", "crossbeam-utils", "std"] }
 crossbeam-epoch = { version = "0.9", features = ["alloc", "once_cell", "std"] }
 digest = { version = "0.10", features = ["alloc", "block-buffer", "core-api", "mac", "std", "subtle"] }
@@ -90,7 +90,7 @@ bytes = { version = "1", features = ["serde", "std"] }
 cc = { version = "1", default-features = false, features = ["jobserver", "parallel"] }
 chrono = { version = "0.4", features = ["clock", "libc", "oldtime", "std", "time", "winapi"] }
 clap = { version = "3", features = ["atty", "clap_derive", "color", "derive", "env", "once_cell", "std", "strsim", "suggestions", "termcolor"] }
-criterion = { version = "0.3", features = ["async", "async_tokio", "cargo_bench_support", "futures", "tokio"] }
+criterion = { version = "0.3", features = ["async", "async_futures", "async_tokio", "cargo_bench_support", "futures", "tokio"] }
 crossbeam-deque = { version = "0.8", features = ["crossbeam-epoch", "crossbeam-utils", "std"] }
 crossbeam-epoch = { version = "0.9", features = ["alloc", "once_cell", "std"] }
 digest = { version = "0.10", features = ["alloc", "block-buffer", "core-api", "mac", "std", "subtle"] }

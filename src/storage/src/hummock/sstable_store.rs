@@ -87,23 +87,22 @@ impl SstableStore {
     }
 
     pub async fn put(&self, sst: Sstable, data: Bytes, policy: CachePolicy) -> HummockResult<()> {
-        self.put_sst_data(sst.id, data.clone()).await?;
+        let charge = sst
+            .blocks
+            .iter()
+            .map(|block| block.restart_point_len())
+            .sum::<usize>()
+            * size_of::<usize>()
+            + sst.meta.encoded_size()
+            + data.len();
+        self.put_sst_data(sst.id, data).await?;
 
         fail_point!("metadata_upload_err");
         if let Err(e) = self.put_meta(&sst).await {
             self.delete_sst_data(sst.id).await?;
             return Err(e);
         }
-
         if let CachePolicy::Fill = policy {
-            let charge = sst
-                .blocks
-                .iter()
-                .map(|block| block.restart_point_len())
-                .sum::<usize>()
-                * size_of::<usize>()
-                + sst.meta.encoded_size()
-                + data.len();
             self.meta_cache
                 .insert(sst.id, sst.id, charge, Box::new(sst));
         }

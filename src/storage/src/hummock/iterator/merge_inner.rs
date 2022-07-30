@@ -182,7 +182,7 @@ where
 
 /// The behaviour of `next` of order aware merge iterator is different from the normal one, so we
 /// extract this trait.
-trait MergeIteratorNext {
+pub trait MergeIteratorNext {
     type HummockResultFuture<'a>: Future<Output = HummockResult<()>> + Send + 'a
     where
         Self: 'a;

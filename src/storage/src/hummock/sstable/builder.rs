@@ -73,72 +73,67 @@ pub struct SstableBuilder {
     /// Write buffer.
     buf: BytesMut,
     /// Current block builder.
-    block_builder: Option<BlockBuilder>,
+    block_builder: BlockBuilder,
     /// Block metadata vec.
     block_metas: Vec<BlockMeta>,
     /// `table_id` of added keys.
     table_ids: BTreeSet<u32>,
+    last_table_id: u32,
     /// Hashes of user keys.
     user_key_hashes: Vec<u32>,
-    /// Last added full key.
-    last_full_key: Bytes,
+    last_full_key: Vec<u8>,
     key_count: usize,
     sstable_id: u64,
+    raw_value: BytesMut,
 }
 
 impl SstableBuilder {
     pub fn new(sstable_id: u64, options: SstableBuilderOptions) -> Self {
         Self {
-            options: options.clone(),
-            buf: BytesMut::with_capacity(options.capacity),
-            block_builder: None,
+            buf: BytesMut::with_capacity(options.capacity + options.block_capacity),
+            block_builder: BlockBuilder::new(BlockBuilderOptions {
+                capacity: options.block_capacity,
+                restart_interval: options.restart_interval,
+                compression_algorithm: options.compression_algorithm,
+            }),
             block_metas: Vec::with_capacity(options.capacity / options.block_capacity + 1),
             table_ids: BTreeSet::new(),
             user_key_hashes: Vec::with_capacity(options.capacity / DEFAULT_ENTRY_SIZE + 1),
-            last_full_key: Bytes::default(),
+            last_table_id: 0,
+            options,
             key_count: 0,
             sstable_id,
+            raw_value: BytesMut::new(),
+            last_full_key: vec![],
         }
     }
 
     /// Add kv pair to sstable.
     pub fn add(&mut self, full_key: &[u8], value: HummockValue<&[u8]>) {
         // Rotate block builder if the previous one has been built.
-        if self.block_builder.is_none() {
-            self.last_full_key.clear();
-            self.block_builder = Some(BlockBuilder::new(BlockBuilderOptions {
-                capacity: self.options.block_capacity,
-                restart_interval: self.options.restart_interval,
-                compression_algorithm: self.options.compression_algorithm,
-            }));
+        if self.block_builder.is_empty() {
             self.block_metas.push(BlockMeta {
                 offset: self.buf.len() as u32,
                 len: 0,
-                smallest_key: vec![],
+                smallest_key: full_key.to_vec(),
             })
         }
 
-        let block_builder = self.block_builder.as_mut().unwrap();
-
         // TODO: refine me
-        let mut raw_value = BytesMut::default();
-        value.encode(&mut raw_value);
+        value.encode(&mut self.raw_value);
         if let Some(table_id) = get_table_id(full_key) {
-            self.table_ids.insert(table_id);
+            if self.last_table_id != table_id {
+                self.table_ids.insert(table_id);
+                self.last_table_id = table_id;
+            }
         }
-        let raw_value = raw_value.freeze();
-
-        block_builder.add(full_key, &raw_value);
+        self.block_builder.add(full_key, self.raw_value.as_ref());
+        self.raw_value.clear();
 
         let user_key = user_key(full_key);
         self.user_key_hashes.push(farmhash::fingerprint32(user_key));
 
-        if self.last_full_key.is_empty() {
-            self.block_metas.last_mut().unwrap().smallest_key = full_key.to_vec();
-        }
-        self.last_full_key = Bytes::copy_from_slice(full_key);
-
-        if block_builder.approximate_len() >= self.options.block_capacity {
+        if self.block_builder.approximate_len() >= self.options.block_capacity {
             self.build_block();
         }
         self.key_count += 1;
@@ -158,9 +153,14 @@ impl SstableBuilder {
     /// ```
     pub fn finish(mut self) -> (u64, Bytes, SstableMeta, Vec<u32>) {
         let smallest_key = self.block_metas[0].smallest_key.clone();
-        let largest_key = self.last_full_key.to_vec();
+        let largest_key = if self.block_builder.is_empty() {
+            self.last_full_key.clone()
+        } else {
+            self.block_builder.get_last_key().to_vec()
+        };
         self.build_block();
         self.buf.put_u32_le(self.block_metas.len() as u32);
+        assert!(!smallest_key.is_empty());
 
         let meta = SstableMeta {
             block_metas: self.block_metas,
@@ -189,18 +189,22 @@ impl SstableBuilder {
     }
 
     pub fn approximate_len(&self) -> usize {
-        self.buf.len() + 4
+        self.buf.len() + self.block_builder.approximate_len() + 4
     }
 
     fn build_block(&mut self) {
         // Skip empty block.
-        if self.block_builder.is_none() {
+        if self.block_builder.is_empty() {
             return;
         }
+        self.last_full_key.clear();
+        self.last_full_key
+            .extend_from_slice(self.block_builder.get_last_key());
         let mut block_meta = self.block_metas.last_mut().unwrap();
-        let block = self.block_builder.take().unwrap().build();
-        self.buf.put_slice(&block);
+        let block = self.block_builder.build();
+        self.buf.put_slice(block);
         block_meta.len = self.buf.len() as u32 - block_meta.offset;
+        self.block_builder.clear();
     }
 
     pub fn len(&self) -> usize {

@@ -212,7 +212,8 @@ pub struct BlockBuilder {
 impl BlockBuilder {
     pub fn new(options: BlockBuilderOptions) -> Self {
         Self {
-            buf: BytesMut::with_capacity(options.capacity),
+            // add more space to avoid re-allocate space.
+            buf: BytesMut::with_capacity(options.capacity + 256),
             restart_count: options.restart_interval,
             restart_points: Vec::with_capacity(
                 options.capacity / DEFAULT_ENTRY_SIZE / options.restart_interval + 1,
@@ -247,7 +248,6 @@ impl BlockBuilder {
         // Update restart point if needed and calculate diff key.
         let diff_key = if self.entry_count % self.restart_count == 0 {
             self.restart_points.push(self.buf.len() as u32);
-            self.last_key = key.to_vec();
             key
         } else {
             bytes_diff(&self.last_key, key)
@@ -264,8 +264,24 @@ impl BlockBuilder {
         self.buf.put_slice(diff_key);
         self.buf.put_slice(value);
 
-        self.last_key = key.to_vec();
+        self.last_key.clear();
+        self.last_key.extend_from_slice(key);
         self.entry_count += 1;
+    }
+
+    pub fn get_last_key(&self) -> &[u8] {
+        &self.last_key
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.buf.clear();
+        self.restart_points.clear();
+        self.last_key.clear();
+        self.entry_count = 0;
     }
 
     /// Finishes building block.
@@ -280,14 +296,14 @@ impl BlockBuilder {
     /// # Panics
     ///
     /// Panic if there is compression error.
-    pub fn build(mut self) -> Bytes {
+    pub fn build(&mut self) -> &[u8] {
         assert!(self.entry_count > 0);
         for restart_point in &self.restart_points {
             self.buf.put_u32_le(*restart_point);
         }
         self.buf.put_u32_le(self.restart_points.len() as u32);
-        let mut buf = match self.compression_algorithm {
-            CompressionAlgorithm::None => self.buf,
+        match self.compression_algorithm {
+            CompressionAlgorithm::None => (),
             CompressionAlgorithm::Lz4 => {
                 let mut encoder = lz4::EncoderBuilder::new()
                     .level(4)
@@ -300,7 +316,7 @@ impl BlockBuilder {
                     .unwrap();
                 let (writer, result) = encoder.finish();
                 result.map_err(HummockError::encode_error).unwrap();
-                writer.into_inner()
+                self.buf = writer.into_inner();
             }
             CompressionAlgorithm::Zstd => {
                 let mut encoder =
@@ -315,18 +331,19 @@ impl BlockBuilder {
                     .finish()
                     .map_err(HummockError::encode_error)
                     .unwrap();
-                writer.into_inner()
+                self.buf = writer.into_inner();
             }
         };
-        self.compression_algorithm.encode(&mut buf);
-        let checksum = xxhash64_checksum(&buf);
-        buf.put_u64_le(checksum);
-        buf.freeze()
+        self.compression_algorithm.encode(&mut self.buf);
+        let checksum = xxhash64_checksum(&self.buf);
+        self.buf.put_u64_le(checksum);
+        self.buf.as_ref()
     }
 
     /// Approximate block len (uncompressed).
     pub fn approximate_len(&self) -> usize {
-        self.buf.len() + 4 * self.restart_points.len() + 4 + 1 + 4
+        // block + restart_points + restart_points.len + compression_algorithm + checksum
+        self.buf.len() + 4 * self.restart_points.len() + 4 + 1 + 8
     }
 }
 
@@ -343,8 +360,8 @@ mod tests {
         builder.add(&full_key(b"k2", 2), b"v02");
         builder.add(&full_key(b"k3", 3), b"v03");
         builder.add(&full_key(b"k4", 4), b"v04");
-        let buf = builder.build();
-        let block = Box::new(Block::decode(buf).unwrap());
+        let buf = builder.build().to_vec();
+        let block = Box::new(Block::decode(Bytes::from(buf)).unwrap());
         let mut bi = BlockIterator::new(BlockHolder::from_owned_block(block));
 
         bi.seek_to_first();
@@ -387,8 +404,8 @@ mod tests {
         builder.add(&full_key(b"k2", 2), b"v02");
         builder.add(&full_key(b"k3", 3), b"v03");
         builder.add(&full_key(b"k4", 4), b"v04");
-        let buf = builder.build();
-        let block = Box::new(Block::decode(buf).unwrap());
+        let buf = builder.build().to_vec();
+        let block = Box::new(Block::decode(Bytes::from(buf)).unwrap());
         let mut bi = BlockIterator::new(BlockHolder::from_owned_block(block));
 
         bi.seek_to_first();

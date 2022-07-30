@@ -41,15 +41,11 @@ use risingwave_rpc_client::HummockMetaClient;
 use tokio::sync::oneshot::Sender;
 use tokio::task::JoinHandle;
 
-use super::iterator::ConcatIterator;
 use super::multi_builder::CapacitySplitTableBuilder;
-use super::{
-    CompressionAlgorithm, HummockResult, Sstable, SstableBuilder, SstableBuilderOptions,
-    SstableIterator, SstableIteratorType,
-};
+use super::{CompressionAlgorithm, HummockResult, Sstable, SstableBuilderOptions};
 use crate::hummock::compaction_executor::CompactionExecutor;
 use crate::hummock::iterator::{
-    Forward, HummockIterator, HummockIteratorUnion, MultiSstIterator, UnorderedMergeIteratorInner,
+    ConcatSstableIterator, Forward, HummockIterator, UnorderedMergeIteratorInner,
 };
 use crate::hummock::multi_builder::{SealedSstableBuilder, TableBuilderFactory};
 use crate::hummock::shared_buffer::shared_buffer_uploader::UploadTaskPayload;
@@ -59,7 +55,7 @@ use crate::hummock::sstable_store::SstableStoreRef;
 use crate::hummock::state_store::ForwardIter;
 use crate::hummock::utils::{can_concat, MemoryLimiter, MemoryTracker};
 use crate::hummock::vacuum::Vacuum;
-use crate::hummock::{CachePolicy, HummockError};
+use crate::hummock::{CachePolicy, HummockError, SstableBuilder};
 use crate::monitor::{StateStoreMetrics, StoreLocalStatistic};
 
 pub type SstableIdGenerator =
@@ -118,7 +114,7 @@ pub struct CompactorContext {
     pub memory_limiter: Arc<MemoryLimiter>,
 }
 
-trait CompactionFilter: Send + DynClone {
+pub trait CompactionFilter: Send + DynClone {
     fn should_delete(&mut self, _: &[u8]) -> bool {
         false
     }
@@ -560,7 +556,7 @@ impl Compactor {
             let compaction_executor = compactor.context.compaction_executor.as_ref().cloned();
             let filter = multi_filter.clone();
             let split_task = async move {
-                let merge_iter = compactor.build_sst_iter().await?;
+                let merge_iter = compactor.build_sst_iter()?;
                 compactor
                     .compact_key_range_with_filter(split_index, merge_iter, filter)
                     .await
@@ -793,9 +789,8 @@ impl Compactor {
     }
 
     /// Build the merge iterator based on the given input ssts.
-    async fn build_sst_iter(&self) -> HummockResult<MultiSstIterator> {
+    fn build_sst_iter(&self) -> HummockResult<impl HummockIterator<Direction = Forward>> {
         let mut table_iters = Vec::new();
-        let mut stats = StoreLocalStatistic::default();
         let read_options = Arc::new(SstableIteratorReadOptions { prefetch: true });
 
         // TODO: check memory limit
@@ -804,41 +799,24 @@ impl Compactor {
                 continue;
             }
             // Do not need to filter the table because manager has done it.
-            // let read_statistics: &mut TableSetStatistics = if *level_idx ==
-            // compact_task.target_level {
-            //     compact_task.metrics.as_mut().unwrap().read_level_nplus1.as_mut().unwrap()
-            // } else {
-            //     compact_task.metrics.as_mut().unwrap().read_level_n.as_mut().unwrap()
-            // };
-            // for table in &tables {
-            //     read_statistics.size_gb += table.meta.estimated_size as f64 / (1024 * 1024 *
-            // 1024) as f64;     read_statistics.cnt += 1;
-            // }
 
             if level.level_type == LevelType::Nonoverlapping as i32 {
                 debug_assert!(can_concat(&level.table_infos.iter().collect_vec()));
-                table_iters.push(HummockIteratorUnion::First(ConcatIterator::new(
+                table_iters.push(ConcatSstableIterator::new(
                     level.table_infos.clone(),
                     self.context.sstable_store.clone(),
                     read_options.clone(),
-                )));
+                ));
             } else {
                 for table_info in &level.table_infos {
-                    let table = self
-                        .context
-                        .sstable_store
-                        .load_table(table_info.id, true, &mut stats)
-                        .await?;
-                    table_iters.push(HummockIteratorUnion::Second(SstableIterator::create(
-                        table,
+                    table_iters.push(ConcatSstableIterator::new(
+                        vec![table_info.clone()],
                         self.context.sstable_store.clone(),
                         read_options.clone(),
-                    )));
+                    ));
                 }
             }
         }
-        stats.report(self.context.stats.as_ref());
-
         Ok(UnorderedMergeIteratorInner::new(
             table_iters,
             self.context.stats.clone(),
@@ -977,7 +955,7 @@ impl Compactor {
         (join_handle, shutdown_tx)
     }
 
-    async fn compact_and_build_sst<T: TableBuilderFactory>(
+    pub async fn compact_and_build_sst<T: TableBuilderFactory>(
         sst_builder: &mut CapacitySplitTableBuilder<T>,
         kr: KeyRange,
         mut iter: impl HummockIterator<Direction = Forward>,

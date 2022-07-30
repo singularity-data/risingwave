@@ -42,7 +42,7 @@ pub mod sstable_store;
 mod state_store;
 #[cfg(any(test, feature = "test"))]
 pub mod test_utils;
-mod utils;
+pub mod utils;
 pub use utils::MemoryLimiter;
 pub mod vacuum;
 pub mod value;

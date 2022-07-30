@@ -108,7 +108,7 @@ fn build_block_data(t: u32, i: u64) -> Bytes {
             builder.add(&key(tt, ii), &value(ii));
         }
     }
-    builder.build()
+    Bytes::from(builder.build().to_vec())
 }
 
 fn key(t: u32, i: u64) -> Bytes {

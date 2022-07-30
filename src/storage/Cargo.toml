@@ -78,7 +78,7 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 zstd = "0.11.2"
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = { version = "0.3", features = ["async_futures"]}
 risingwave_test_runner = { path = "../test_runner" }
 uuid = { version = "1", features = ["v4"] }
 
@@ -90,25 +90,30 @@ fiemap = "0.1.1"
 # tikv = ["tikv-client"]
 test = []
 failpoints = ["fail/failpoints"]
+#
+#[[bench]]
+#name = "bench_block_iter"
+#harness = false
+## Enable debug if you want to generate flamegraph.
+## debug = true
+#
+#[[bench]]
+#name = "bench_lru_cache"
+#harness = false
+#
+#[[bench]]
+#name = "bench_merge_iter"
+#harness = false
+#
+#[[bench]]
+#name = "bench_fs_operation"
+#harness = false
+#
+#[[bench]]
+#name = "bench_compression"
+#harness = false
 
 [[bench]]
-name = "bench_block_iter"
-harness = false
-# Enable debug if you want to generate flamegraph.
-# debug = true
-
-[[bench]]
-name = "bench_lru_cache"
+name = "bench_compactor"
 harness = false
 
-[[bench]]
-name = "bench_merge_iter"
-harness = false
-
-[[bench]]
-name = "bench_fs_operation"
-harness = false
-
-[[bench]]
-name = "bench_compression"
-harness = false
