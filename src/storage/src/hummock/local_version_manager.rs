@@ -44,7 +44,9 @@ use crate::hummock::conflict_detector::ConflictDetector;
 use crate::hummock::shared_buffer::shared_buffer_batch::SharedBufferItem;
 use crate::hummock::shared_buffer::shared_buffer_uploader::UploadTaskPayload;
 use crate::hummock::shared_buffer::UploadTaskType::{FlushWriteBatch, SyncEpoch};
-use crate::hummock::shared_buffer::{OrderIndex, SharedBufferEvent, WriteRequest};
+use crate::hummock::shared_buffer::{
+    KeyIndexedUncommittedData, OrderIndex, SharedBufferEvent, WriteRequest,
+};
 use crate::hummock::utils::validate_table_key_range;
 use crate::hummock::{
     HummockEpoch, HummockError, HummockResult, HummockVersionId, INVALID_VERSION_ID,
@@ -469,36 +471,62 @@ impl LocalVersionManager {
         Some((epoch, join_handle))
     }
 
-    pub async fn sync_shared_buffer(&self, epoch: Option<HummockEpoch>) -> HummockResult<()> {
-        let epochs = match epoch {
-            Some(epoch) => vec![epoch],
+    pub async fn sync_shared_buffer(&self, epoch_range: Option<(u64, u64)>) -> HummockResult<()> {
+        let epochs = match epoch_range {
+            Some(epoch_range) => self
+                .local_version
+                .read()
+                .scan_shared_buffer(epoch_range)
+                .map(|(epoch, _)| *epoch)
+                .collect_vec(),
             None => self
                 .local_version
                 .read()
                 .iter_shared_buffer()
                 .map(|(epoch, _)| *epoch)
-                .collect(),
+                .collect_vec(),
         };
-        for epoch in epochs {
-            self.sync_shared_buffer_epoch(epoch).await?;
+        if epochs.is_empty() {
+            return Ok(());
         }
-        Ok(())
-    }
-
-    pub async fn sync_shared_buffer_epoch(&self, epoch: HummockEpoch) -> HummockResult<()> {
-        tracing::trace!("sync epoch {}", epoch);
+        let epoch_range = epoch_range.unwrap_or_else(|| (0, *epochs.last().unwrap()));
         let (tx, rx) = oneshot::channel();
         self.buffer_tracker
-            .send_event(SharedBufferEvent::SyncEpoch(epoch, tx));
+            .send_event(SharedBufferEvent::SyncEpoch(epochs.clone(), tx));
         let join_handles = rx.await.unwrap();
         for result in join_all(join_handles).await {
             result.expect("should be able to join the flush handle")
         }
-        let (order_index, task_payload, task_write_batch_size) = match self
+
+        tracing::info!("sync epoch {:?},epoch {:?}", epochs, epoch_range.1);
+        self.sync_all_shared_buffer(epoch_range).await?;
+        self.buffer_tracker
+            .send_event(SharedBufferEvent::EpochSynced(epochs));
+        Ok(())
+    }
+
+    /// Sync all shared buffer less than or equal to epoch
+    pub async fn sync_all_shared_buffer(&self, epoch_range: (u64, u64)) -> HummockResult<()> {
+        let epoch = epoch_range.1;
+        let mut size = 0;
+        let keyed_payload = self
             .local_version
             .read()
-            .get_shared_buffer(epoch)
-            .and_then(|shared_buffer| shared_buffer.write().new_upload_task(SyncEpoch))
+            .scan_shared_buffer(epoch_range)
+            .map(|(key, value)| {
+                if key != &epoch {
+                    size += value.read().get_upload_size();
+                }
+                (*value).clone()
+            })
+            .flat_map(|value| value.write().get_uncommitted_data())
+            .collect::<KeyIndexedUncommittedData>();
+        let (order_index, task_payload, task_write_batch_size) = match self
+            .local_version
+            .write()
+            .new_shared_buffer(epoch, Arc::new(AtomicUsize::new(0)))
+            .write()
+            .new_upload_task(SyncEpoch(Some((keyed_payload, size))))
         {
             Some(task) => task,
             None => {
@@ -518,8 +546,6 @@ impl LocalVersionManager {
         if let Some(conflict_detector) = self.write_conflict_detector.as_ref() {
             conflict_detector.archive_epoch(epoch);
         }
-        self.buffer_tracker
-            .send_event(SharedBufferEvent::EpochSynced(epoch));
         ret
     }
 
@@ -543,6 +569,7 @@ impl LocalVersionManager {
 
         let ret = match task_result {
             Ok(ssts) => {
+                tracing::info!("test{:?}", epoch);
                 shared_buffer_guard.succeed_upload_task(order_index, ssts);
                 Ok(())
             }
@@ -564,6 +591,7 @@ impl LocalVersionManager {
     }
 
     pub fn get_uncommitted_ssts(&self, epoch: HummockEpoch) -> Vec<LocalSstableInfo> {
+        tracing::info!("batch epoch{}", epoch);
         self.local_version
             .read()
             .get_shared_buffer(epoch)
@@ -840,27 +868,31 @@ impl LocalVersionManager {
                             try_flush_shared_buffer(&syncing_epoch, &mut epoch_join_handle);
                         }
                     }
-                    SharedBufferEvent::SyncEpoch(epoch, join_handle_sender) => {
-                        assert!(
-                            syncing_epoch.insert(epoch),
-                            "epoch {} cannot be synced for twice",
-                            epoch
-                        );
-                        let _ = join_handle_sender
-                            .send(epoch_join_handle.remove(&epoch).unwrap_or_default())
-                            .inspect_err(|e| {
-                                error!(
-                                    "unable to send join handles of epoch {}. Err {:?}",
-                                    epoch, e
+                    SharedBufferEvent::SyncEpoch(epochs, join_handle_sender) => {
+                        let join_handle = epochs
+                            .into_iter()
+                            .flat_map(|epoch| {
+                                tracing::info!("sadsad{:?}", syncing_epoch);
+                                assert!(
+                                    syncing_epoch.insert(epoch),
+                                    "epoch {} cannot be synced for twice",
+                                    epoch
                                 );
-                            });
+                                epoch_join_handle.remove(&epoch).unwrap_or_default()
+                            })
+                            .collect_vec();
+                        let _ = join_handle_sender.send(join_handle).inspect_err(|e| {
+                            error!("unable to send join handles Err {:?}", e);
+                        });
                     }
-                    SharedBufferEvent::EpochSynced(epoch) => {
-                        assert!(
-                            syncing_epoch.remove(&epoch),
-                            "removing a previous not synced epoch {}",
-                            epoch
-                        );
+                    SharedBufferEvent::EpochSynced(epochs) => {
+                        epochs.into_iter().for_each(|epoch| {
+                            assert!(
+                                syncing_epoch.remove(&epoch),
+                                "removing a previous not synced epoch {}",
+                                epoch
+                            )
+                        });
                     }
 
                     SharedBufferEvent::Clear(notifier) => {

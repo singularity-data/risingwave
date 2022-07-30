@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Bound::{Excluded, Included};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -70,6 +71,15 @@ impl LocalVersion {
             .entry(epoch)
             .or_insert_with(|| Arc::new(RwLock::new(SharedBuffer::new(global_upload_task_size))))
             .clone()
+    }
+
+    /// Returns all shared buffer less than or equal to epoch
+    pub fn scan_shared_buffer(
+        &self,
+        epoch_range: (HummockEpoch, HummockEpoch),
+    ) -> impl Iterator<Item = (&HummockEpoch, &Arc<RwLock<SharedBuffer>>)> {
+        self.shared_buffer
+            .range((Excluded(epoch_range.0), Included(epoch_range.1)))
     }
 
     pub fn set_pinned_version(&mut self, new_pinned_version: HummockVersion) {

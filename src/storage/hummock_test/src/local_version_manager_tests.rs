@@ -183,7 +183,9 @@ async fn test_update_uncommitted_ssts() {
             .get_shared_buffer(epochs[0])
             .unwrap()
             .write();
-        let (task_id, payload, task_size) = shared_buffer_guard.new_upload_task(SyncEpoch).unwrap();
+        let (task_id, payload, task_size) = shared_buffer_guard
+            .new_upload_task(SyncEpoch(None))
+            .unwrap();
         {
             assert_eq!(1, payload.len());
             assert_eq!(1, payload[0].len());
@@ -238,7 +240,9 @@ async fn test_update_uncommitted_ssts() {
             .get_shared_buffer(epochs[1])
             .unwrap()
             .write();
-        let (task_id, payload, task_size) = shared_buffer_guard.new_upload_task(SyncEpoch).unwrap();
+        let (task_id, payload, task_size) = shared_buffer_guard
+            .new_upload_task(SyncEpoch(None))
+            .unwrap();
         {
             assert_eq!(1, payload.len());
             assert_eq!(1, payload[0].len());

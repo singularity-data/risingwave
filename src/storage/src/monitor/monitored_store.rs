@@ -224,11 +224,11 @@ where
         }
     }
 
-    fn sync(&self, epoch: Option<u64>) -> Self::SyncFuture<'_> {
+    fn sync(&self, epoch_range: Option<(u64, u64)>) -> Self::SyncFuture<'_> {
         async move {
             let timer = self.stats.shared_buffer_to_l0_duration.start_timer();
             self.inner
-                .sync(epoch)
+                .sync(epoch_range)
                 .await
                 .inspect_err(|e| error!("Failed in sync: {:?}", e))?;
             timer.observe_duration();

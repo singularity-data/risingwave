@@ -98,7 +98,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            storage.sync(Some(epoch)).await.unwrap();
+            storage.sync(Some((epoch - 1, epoch))).await.unwrap();
             hummock_meta_client
                 .commit_epoch(
                     epoch,
@@ -376,7 +376,7 @@ mod tests {
             local.put(ramdom_key, StorageValue::new_default_put(val.clone()));
             write_batch.ingest().await.unwrap();
 
-            storage.sync(Some(epoch)).await.unwrap();
+            storage.sync(Some((epoch - 1, epoch))).await.unwrap();
             let ssts = storage.local_version_manager().get_uncommitted_ssts(epoch);
             hummock_meta_client.commit_epoch(epoch, ssts).await.unwrap();
         }
@@ -482,7 +482,7 @@ mod tests {
             local.put(ramdom_key, StorageValue::new_default_put(val.clone()));
             write_batch.ingest().await.unwrap();
 
-            storage.sync(Some(epoch)).await.unwrap();
+            storage.sync(Some((epoch - 1, epoch))).await.unwrap();
             hummock_meta_client
                 .commit_epoch(
                     epoch,

@@ -107,7 +107,7 @@ async fn test_failpoints_state_store_read_upload() {
         .unwrap();
 
     // sync epoch1 test the read_error
-    hummock_storage.sync(Some(1)).await.unwrap();
+    hummock_storage.sync(Some((0, 1))).await.unwrap();
     meta_client
         .commit_epoch(
             1,
@@ -164,7 +164,7 @@ async fn test_failpoints_state_store_read_upload() {
     // test the upload_error
     fail::cfg(mem_upload_err, "return").unwrap();
 
-    let result = hummock_storage.sync(Some(3)).await;
+    let result = hummock_storage.sync(Some((2, 3))).await;
     assert!(result.is_err());
     meta_client
         .commit_epoch(

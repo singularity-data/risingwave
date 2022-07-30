@@ -181,7 +181,7 @@ pub struct SharedBuffer {
 
 pub enum UploadTaskType {
     FlushWriteBatch,
-    SyncEpoch,
+    SyncEpoch(Option<(KeyIndexedUncommittedData, usize)>),
 }
 
 #[derive(Debug)]
@@ -208,10 +208,10 @@ pub enum SharedBufferEvent {
     /// An epoch is going to be synced. Once the event is processed, there will be no more flush
     /// task on this epoch. Previous concurrent flush task join handle will be returned by the join
     /// handle sender.
-    SyncEpoch(HummockEpoch, oneshot::Sender<Vec<JoinHandle<()>>>),
+    SyncEpoch(Vec<HummockEpoch>, oneshot::Sender<Vec<JoinHandle<()>>>),
 
     /// An epoch has been synced.
-    EpochSynced(HummockEpoch),
+    EpochSynced(Vec<HummockEpoch>),
 
     /// Clear shared buffer and reset all states
     Clear(oneshot::Sender<()>),
@@ -324,6 +324,16 @@ impl SharedBuffer {
         self.replicate_batches_size = 0;
     }
 
+    pub fn get_uncommitted_data(&mut self) -> KeyIndexedUncommittedData {
+        assert!(
+            self.uploading_tasks.is_empty(),
+            "when sync an epoch, there should not be any uploading task"
+        );
+        let mut keyed_payload = KeyIndexedUncommittedData::new();
+        swap(&mut self.uncommitted_data, &mut keyed_payload);
+        keyed_payload
+    }
+
     /// Create a new upload task
     ///
     /// Return: (order index, task payload, task write batch size)
@@ -383,18 +393,15 @@ impl SharedBuffer {
                     );
                     keyed_payload.insert(key, data);
                 }
-
                 keyed_payload
             }
-            UploadTaskType::SyncEpoch => {
-                assert!(
-                    self.uploading_tasks.is_empty(),
-                    "when sync an epoch, there should not be any uploading task"
-                );
-                let mut keyed_payload = KeyIndexedUncommittedData::new();
-                swap(&mut self.uncommitted_data, &mut keyed_payload);
-                keyed_payload
-            }
+            UploadTaskType::SyncEpoch(keyed_payload) => match keyed_payload {
+                Some((keyed_payload, size)) => {
+                    self.upload_batches_size += size;
+                    keyed_payload
+                }
+                None => self.get_uncommitted_data(),
+            },
         };
 
         // The min order index in the task payload will be the order index of the payload.
@@ -511,6 +518,10 @@ impl SharedBuffer {
 
     pub fn size(&self) -> usize {
         self.upload_batches_size + self.replicate_batches_size
+    }
+
+    pub fn get_upload_size(&self) -> usize {
+        self.upload_batches_size
     }
 
     fn get_next_order_index(&mut self) -> OrderIndex {
@@ -706,7 +717,7 @@ mod tests {
 
         let (order_index3, payload3, task_size) = shared_buffer
             .borrow_mut()
-            .new_upload_task(SyncEpoch)
+            .new_upload_task(SyncEpoch(None))
             .unwrap();
 
         assert_eq!(order_index3, 0);

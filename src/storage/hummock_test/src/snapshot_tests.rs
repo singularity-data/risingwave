@@ -114,7 +114,10 @@ async fn test_snapshot_inner(enable_sync: bool, enable_commit: bool) {
         .await
         .unwrap();
     if enable_sync {
-        hummock_storage.sync(Some(epoch1)).await.unwrap();
+        hummock_storage
+            .sync(Some((epoch1 - 1, epoch1)))
+            .await
+            .unwrap();
         if enable_commit {
             mock_hummock_meta_client
                 .commit_epoch(
@@ -146,7 +149,10 @@ async fn test_snapshot_inner(enable_sync: bool, enable_commit: bool) {
         .await
         .unwrap();
     if enable_sync {
-        hummock_storage.sync(Some(epoch2)).await.unwrap();
+        hummock_storage
+            .sync(Some((epoch2 - 1, epoch2)))
+            .await
+            .unwrap();
         if enable_commit {
             mock_hummock_meta_client
                 .commit_epoch(
@@ -179,7 +185,10 @@ async fn test_snapshot_inner(enable_sync: bool, enable_commit: bool) {
         .await
         .unwrap();
     if enable_sync {
-        hummock_storage.sync(Some(epoch3)).await.unwrap();
+        hummock_storage
+            .sync(Some((epoch3 - 1, epoch3)))
+            .await
+            .unwrap();
         if enable_commit {
             mock_hummock_meta_client
                 .commit_epoch(
@@ -238,7 +247,10 @@ async fn test_snapshot_range_scan_inner(enable_sync: bool, enable_commit: bool) 
         .await
         .unwrap();
     if enable_sync {
-        hummock_storage.sync(Some(epoch)).await.unwrap();
+        hummock_storage
+            .sync(Some((epoch - 1, epoch)))
+            .await
+            .unwrap();
         if enable_commit {
             mock_hummock_meta_client
                 .commit_epoch(
@@ -307,7 +319,10 @@ async fn test_snapshot_backward_range_scan_inner(enable_sync: bool, enable_commi
         .await
         .unwrap();
     if enable_sync {
-        hummock_storage.sync(Some(epoch)).await.unwrap();
+        hummock_storage
+            .sync(Some((epoch - 1, epoch)))
+            .await
+            .unwrap();
         if enable_commit {
             mock_hummock_meta_client
                 .commit_epoch(
@@ -337,7 +352,10 @@ async fn test_snapshot_backward_range_scan_inner(enable_sync: bool, enable_commi
         .await
         .unwrap();
     if enable_sync {
-        hummock_storage.sync(Some(epoch + 1)).await.unwrap();
+        hummock_storage
+            .sync(Some((epoch, epoch + 1)))
+            .await
+            .unwrap();
         if enable_commit {
             mock_hummock_meta_client
                 .commit_epoch(

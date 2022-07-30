@@ -15,6 +15,7 @@
 use core::time::Duration;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -74,6 +75,7 @@ pub struct LocalStreamManagerCore {
 /// `LocalStreamManager` manages all stream executors in this project.
 pub struct LocalStreamManager {
     core: Mutex<LocalStreamManagerCore>,
+    max_sync_epoch: AtomicU64,
 }
 
 pub struct ExecutorParams {
@@ -127,6 +129,7 @@ impl LocalStreamManager {
     fn with_core(core: LocalStreamManagerCore) -> Self {
         Self {
             core: Mutex::new(core),
+            max_sync_epoch: AtomicU64::new(0),
         }
     }
 
@@ -182,8 +185,23 @@ impl LocalStreamManager {
     }
 
     pub async fn sync_epoch(&self, epoch: u64) -> Vec<LocalSstableInfo> {
+        let last_epoch;
+        loop {
+            let max_sync_epoch = self.max_sync_epoch.load(Ordering::Relaxed);
+            if epoch <= max_sync_epoch {
+                return vec![];
+            }
+            if self
+                .max_sync_epoch
+                .compare_exchange(max_sync_epoch, epoch, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                last_epoch = max_sync_epoch;
+                break;
+            }
+        }
         dispatch_state_store!(self.state_store(), store, {
-            match store.sync(Some(epoch)).await {
+            match store.sync(Some((last_epoch, epoch))).await {
                 Ok(_) => store.get_uncommitted_ssts(epoch),
                 // TODO: Handle sync failure by propagating it back to global barrier manager
                 Err(e) => panic!(
