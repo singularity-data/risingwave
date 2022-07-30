@@ -23,6 +23,7 @@ use super::{
     ToStream,
 };
 use crate::expr::{Expr, ExprImpl};
+use crate::optimizer::property::FunctionalDependencySet;
 use crate::session::OptimizerContextRef;
 use crate::utils::Condition;
 
@@ -41,7 +42,8 @@ impl LogicalValues {
                 assert_eq!(schema.fields()[i].data_type(), expr.return_type())
             }
         }
-        let base = PlanBase::new_logical(ctx, schema, vec![]);
+        let functional_dependency = FunctionalDependencySet::new();
+        let base = PlanBase::new_logical(ctx, schema, vec![], functional_dependency);
         Self {
             rows: rows.into(),
             base,

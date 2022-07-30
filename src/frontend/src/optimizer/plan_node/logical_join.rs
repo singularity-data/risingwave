@@ -32,7 +32,7 @@ use crate::optimizer::plan_node::{
     BatchFilter, BatchHashJoin, BatchLookupJoin, BatchNestedLoopJoin, EqJoinPredicate,
     LogicalFilter, StreamDynamicFilter, StreamFilter,
 };
-use crate::optimizer::property::{Distribution, RequiredDist};
+use crate::optimizer::property::{Distribution, FunctionalDependencySet, RequiredDist};
 use crate::utils::{ColIndexMapping, Condition, ConditionDisplay};
 
 /// `LogicalJoin` combines two relations according to some condition.
@@ -131,7 +131,16 @@ impl LogicalJoin {
             join_type,
             &output_indices,
         );
-        let base = PlanBase::new_logical(ctx, schema, pk_indices);
+        let functional_dependency = Self::derive_fd(
+            left.schema().len(),
+            right.schema().len(),
+            left.functional_dependency().clone(),
+            right.functional_dependency().clone(),
+            &on,
+            join_type,
+            &output_indices,
+        );
+        let base = PlanBase::new_logical(ctx, schema, pk_indices, functional_dependency);
         LogicalJoin {
             base,
             left,
@@ -307,6 +316,66 @@ impl LogicalJoin {
             .map(|index| i2o.try_map(index))
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default()
+    }
+
+    pub(super) fn derive_fd(
+        left_len: usize,
+        right_len: usize,
+        left_fd_set: FunctionalDependencySet,
+        right_fd_set: FunctionalDependencySet,
+        on: &Condition,
+        join_type: JoinType,
+        output_indices: &[usize],
+    ) -> FunctionalDependencySet {
+        let out_col_num = Self::out_column_num(left_len, right_len, join_type);
+
+        let get_new_left_fd_set = |left_fd_set: FunctionalDependencySet| {
+            ColIndexMapping::with_shift_offset(left_len, 0)
+                .composite(&ColIndexMapping::identity(out_col_num))
+                .rewrite_functional_dependency_set(left_fd_set)
+        };
+        let get_new_right_fd_set = |right_fd_set: FunctionalDependencySet| {
+            ColIndexMapping::with_shift_offset(right_len, left_len.try_into().unwrap())
+                .rewrite_functional_dependency_set(right_fd_set)
+        };
+        let fd_set: FunctionalDependencySet = match join_type {
+            JoinType::Inner => {
+                let mut fd_set = FunctionalDependencySet::new();
+                for i in &on.conjunctions {
+                    if let Some((col, _)) = i.as_eq_const() {
+                        fd_set.add_constant_column(out_col_num, &[col.index()])
+                    } else if let Some((left, right)) = i.as_eq_cond() {
+                        fd_set.add_functional_dependency_by_column_indices(
+                            &[left.index()],
+                            &[right.index()],
+                            out_col_num,
+                        );
+                        fd_set.add_functional_dependency_by_column_indices(
+                            &[right.index()],
+                            &[left.index()],
+                            out_col_num,
+                        );
+                    }
+                }
+                get_new_left_fd_set(left_fd_set)
+                    .into_dependencies()
+                    .into_iter()
+                    .chain(
+                        get_new_right_fd_set(right_fd_set)
+                            .into_dependencies()
+                            .into_iter(),
+                    )
+                    .for_each(|fd| fd_set.add_functional_dependency(fd));
+                fd_set
+            }
+            JoinType::LeftOuter => get_new_right_fd_set(right_fd_set),
+            JoinType::RightOuter => get_new_left_fd_set(left_fd_set),
+            JoinType::FullOuter => FunctionalDependencySet::new(),
+            JoinType::LeftSemi | JoinType::LeftAnti => left_fd_set,
+            JoinType::RightSemi | JoinType::RightAnti => right_fd_set,
+        };
+        ColIndexMapping::with_remaining_columns(output_indices, out_col_num)
+            .rewrite_functional_dependency_set(fd_set)
     }
 
     /// Get a reference to the logical join's on.

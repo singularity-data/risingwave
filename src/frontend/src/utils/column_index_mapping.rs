@@ -19,7 +19,9 @@ use fixedbitset::FixedBitSet;
 use itertools::Itertools;
 
 use crate::expr::{Expr, ExprImpl, ExprRewriter, InputRef};
-use crate::optimizer::property::{Distribution, FieldOrder, Order, RequiredDist};
+use crate::optimizer::property::{
+    Distribution, FieldOrder, FunctionalDependency, FunctionalDependencySet, Order, RequiredDist,
+};
 
 /// `ColIndexMapping` is a partial mapping from usize to usize.
 ///
@@ -122,7 +124,8 @@ impl ColIndexMapping {
                 usize::try_from(target).ok()
             })
             .collect_vec();
-        Self::new(map)
+        let target_size = usize::try_from(source_num as isize + offset).unwrap();
+        Self::with_target_size(map, target_size)
     }
 
     /// Maps the smallest index to 0, the next smallest to 1, and so on.
@@ -185,7 +188,7 @@ impl ColIndexMapping {
     }
 
     /// Union two mapping, the result mapping `target_size` and source size will be the max size
-    /// ofthe two mappings.
+    /// of the two mappings.
     ///
     /// # Panics
     ///
@@ -340,6 +343,37 @@ impl ColIndexMapping {
         }
     }
 
+    /// Rewrite the indices in a functional dependency.
+    ///
+    /// If either the `from` and `to` become empty after mapping, this function will return [`None`]
+    pub fn rewrite_functional_dependency(
+        &self,
+        fd: &FunctionalDependency,
+    ) -> Option<FunctionalDependency> {
+        assert_eq!(fd.from.len(), self.source_size());
+        assert_eq!(fd.to.len(), self.source_size());
+        let new_from = self.rewrite_bitset(&fd.from);
+        let new_to = self.rewrite_bitset(&fd.to);
+        if new_from.is_clear() || new_to.is_clear() {
+            None
+        } else {
+            Some(FunctionalDependency::new(new_from, new_to))
+        }
+    }
+
+    pub fn rewrite_functional_dependency_set(
+        &self,
+        fd_set: FunctionalDependencySet,
+    ) -> FunctionalDependencySet {
+        let mut new_fd_set = FunctionalDependencySet::new();
+        for i in fd_set.into_dependencies() {
+            if let Some(fd) = self.rewrite_functional_dependency(&i) {
+                new_fd_set.add_functional_dependency(fd);
+            }
+        }
+        new_fd_set
+    }
+
     pub fn rewrite_bitset(&self, bitset: &FixedBitSet) -> FixedBitSet {
         assert_eq!(bitset.len(), self.source_size());
         let mut ret = FixedBitSet::with_capacity(self.target_size());
@@ -384,6 +418,12 @@ mod tests {
         assert_eq!(mapping.map(2), 2);
         assert_eq!(mapping.try_map(3), None);
         assert_eq!(mapping.try_map(4), None);
+    }
+
+    #[test]
+    fn test_shift_0_source() {
+        let mapping = ColIndexMapping::with_shift_offset(0, 3);
+        assert_eq!(mapping.target_size(), 3);
     }
 
     #[test]

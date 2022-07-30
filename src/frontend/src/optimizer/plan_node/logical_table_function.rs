@@ -20,6 +20,7 @@ use risingwave_common::error::{ErrorCode, Result};
 use super::{ColPrunable, LogicalFilter, PlanBase, PlanRef, PredicatePushdown, ToBatch, ToStream};
 use crate::expr::{Expr, TableFunction};
 use crate::optimizer::plan_node::BatchTableFunction;
+use crate::optimizer::property::FunctionalDependencySet;
 use crate::session::OptimizerContextRef;
 use crate::utils::Condition;
 
@@ -39,7 +40,8 @@ impl LogicalTableFunction {
                 table_function.function_type.name(),
             )],
         };
-        let base = PlanBase::new_logical(ctx, schema, vec![]);
+        let functional_dependency = FunctionalDependencySet::new();
+        let base = PlanBase::new_logical(ctx, schema, vec![], functional_dependency);
         Self {
             base,
             table_function,

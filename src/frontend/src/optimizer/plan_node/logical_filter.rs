@@ -44,8 +44,26 @@ impl LogicalFilter {
             assert_input_ref!(cond, input.schema().fields().len());
         }
         let schema = input.schema().clone();
+        let column_cnt = schema.len();
         let pk_indices = input.pk_indices().to_vec();
-        let base = PlanBase::new_logical(ctx, schema, pk_indices);
+        let mut functional_dependency = input.functional_dependency().clone();
+        for i in &predicate.conjunctions {
+            if let Some((col, _)) = i.as_eq_const() {
+                functional_dependency.add_constant_column(column_cnt, &[col.index()])
+            } else if let Some((left, right)) = i.as_eq_cond() {
+                functional_dependency.add_functional_dependency_by_column_indices(
+                    &[left.index()],
+                    &[right.index()],
+                    column_cnt,
+                );
+                functional_dependency.add_functional_dependency_by_column_indices(
+                    &[right.index()],
+                    &[left.index()],
+                    column_cnt,
+                );
+            }
+        }
+        let base = PlanBase::new_logical(ctx, schema, pk_indices, functional_dependency);
         LogicalFilter {
             base,
             predicate,

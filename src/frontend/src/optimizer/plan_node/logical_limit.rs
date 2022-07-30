@@ -36,7 +36,8 @@ impl LogicalLimit {
         let ctx = input.ctx();
         let schema = input.schema().clone();
         let pk_indices = input.pk_indices().to_vec();
-        let base = PlanBase::new_logical(ctx, schema, pk_indices);
+        let functional_dependency = input.functional_dependency().clone();
+        let base = PlanBase::new_logical(ctx, schema, pk_indices, functional_dependency);
         LogicalLimit {
             base,
             input,

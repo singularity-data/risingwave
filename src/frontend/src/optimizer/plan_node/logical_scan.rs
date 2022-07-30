@@ -28,6 +28,7 @@ use super::{
 use crate::catalog::ColumnId;
 use crate::expr::{CollectInputRef, ExprImpl, InputRef};
 use crate::optimizer::plan_node::{BatchSeqScan, LogicalFilter, LogicalProject, LogicalValues};
+use crate::optimizer::property::FunctionalDependencySet;
 use crate::session::OptimizerContextRef;
 use crate::utils::{ColIndexMapping, Condition, ConditionDisplay};
 
@@ -87,7 +88,8 @@ impl LogicalScan {
             .unwrap_or_default();
 
         let schema = Schema { fields };
-        let base = PlanBase::new_logical(ctx, schema, pk_indices);
+        let functional_dependency = FunctionalDependencySet::with_key(schema.len(), &pk_indices);
+        let base = PlanBase::new_logical(ctx, schema, pk_indices, functional_dependency);
 
         let mut required_col_idx = output_col_idx.clone();
         let mut visitor =

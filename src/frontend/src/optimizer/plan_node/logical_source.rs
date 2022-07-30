@@ -24,6 +24,7 @@ use super::{
     ToBatch, ToStream,
 };
 use crate::catalog::source_catalog::SourceCatalog;
+use crate::optimizer::property::FunctionalDependencySet;
 use crate::session::OptimizerContextRef;
 use crate::utils::{ColIndexMapping, Condition};
 
@@ -54,7 +55,8 @@ impl LogicalSource {
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
         let schema = Schema { fields };
-        let base = PlanBase::new_logical(ctx, schema, pk_indices);
+        let functional_dependency = FunctionalDependencySet::with_key(schema.len(), &pk_indices);
+        let base = PlanBase::new_logical(ctx, schema, pk_indices, functional_dependency);
         LogicalSource {
             base,
             source_catalog,

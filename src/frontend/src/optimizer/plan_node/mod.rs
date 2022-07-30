@@ -39,7 +39,7 @@ use risingwave_common::error::{ErrorCode, Result};
 use risingwave_pb::batch_plan::PlanNode as BatchPlanProst;
 use risingwave_pb::stream_plan::StreamNode as StreamPlanProst;
 
-use super::property::{Distribution, Order};
+use super::property::{Distribution, FunctionalDependencySet, Order};
 
 /// The common trait over all plan nodes. Used by optimizer framework which will treat all node as
 /// `dyn PlanNode`
@@ -121,6 +121,10 @@ impl dyn PlanNode {
 
     pub fn append_only(&self) -> bool {
         self.plan_base().append_only
+    }
+
+    pub fn functional_dependency(&self) -> &FunctionalDependencySet {
+        &self.plan_base().functional_dependency
     }
 
     /// Serialize the plan node and its children to a batch plan proto.

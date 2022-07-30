@@ -23,6 +23,7 @@ use super::{
     PredicatePushdown, ToBatch, ToStream,
 };
 use crate::catalog::TableId;
+use crate::optimizer::property::FunctionalDependencySet;
 use crate::utils::Condition;
 
 /// [`LogicalDelete`] iterates on input relation and delete the data from specified table.
@@ -42,7 +43,7 @@ impl LogicalDelete {
         let ctx = input.ctx();
         // TODO: support `RETURNING`.
         let schema = Schema::new(vec![Field::unnamed(DataType::Int64)]);
-        let base = PlanBase::new_logical(ctx, schema, vec![]);
+        let base = PlanBase::new_logical(ctx, schema, vec![], FunctionalDependencySet::new());
         Self {
             base,
             table_source_name,

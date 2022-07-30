@@ -24,6 +24,7 @@ use super::{
 use crate::expr::{
     Expr, ExprDisplay, ExprImpl, ExprRewriter, FunctionCall, InputRef, TableFunction,
 };
+use crate::optimizer::property::FunctionalDependencySet;
 use crate::risingwave_common::error::Result;
 use crate::utils::{ColIndexMapping, Condition};
 
@@ -52,7 +53,12 @@ impl LogicalProjectSet {
         let ctx = input.ctx();
         let schema = Self::derive_schema(&select_list, input.schema());
         let pk_indices = Self::derive_pk(input.schema(), input.pk_indices(), &select_list);
-        let base = PlanBase::new_logical(ctx, schema, pk_indices);
+        let functional_dependency = Self::derive_fd(
+            input.schema().len(),
+            input.functional_dependency(),
+            &select_list,
+        );
+        let base = PlanBase::new_logical(ctx, schema, pk_indices, functional_dependency);
         LogicalProjectSet {
             base,
             select_list,
@@ -210,6 +216,21 @@ impl LogicalProjectSet {
         // add `projected_row_id` to pk
         pk.push(0);
         pk
+    }
+
+    fn derive_fd(
+        input_len: usize,
+        input_fd_set: &FunctionalDependencySet,
+        select_list: &[ExprImpl],
+    ) -> FunctionalDependencySet {
+        let i2o = Self::i2o_col_mapping_inner(input_len, select_list);
+        let mut fd_set = FunctionalDependencySet::new();
+        for fd in input_fd_set.as_dependencies() {
+            if let Some(fd) = i2o.rewrite_functional_dependency(fd) {
+                fd_set.add_functional_dependency(fd);
+            }
+        }
+        fd_set
     }
 
     pub fn select_list(&self) -> &[ExprImpl] {

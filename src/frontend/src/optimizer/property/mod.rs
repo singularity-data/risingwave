@@ -18,7 +18,7 @@
 //! also, we have logical property which all [`PlanNode`][PlanNode] has.
 //!
 //! We have not give any common abstract trait for the property yet. They are not so much and we
-//! don't need get a common behaviour now. we can treat them as different traits of the
+//! don't need get a common behavior now. we can treat them as different traits of the
 //! [`PlanNode`][PlanNode] now and refactor them when our optimizer need more
 //! (such as an optimizer based on the Volcano/Cascades model).
 //!
@@ -27,3 +27,5 @@ pub(crate) mod order;
 pub use order::*;
 mod distribution;
 pub use distribution::*;
+mod func_dep;
+pub use func_dep::*;

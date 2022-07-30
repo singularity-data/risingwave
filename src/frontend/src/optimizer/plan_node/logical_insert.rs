@@ -23,6 +23,7 @@ use super::{
     PredicatePushdown, ToBatch, ToStream,
 };
 use crate::catalog::TableId;
+use crate::optimizer::property::FunctionalDependencySet;
 use crate::utils::Condition;
 
 /// `LogicalInsert` iterates on input relation and insert the data into specified table.
@@ -42,7 +43,8 @@ impl LogicalInsert {
     pub fn new(input: PlanRef, table_source_name: String, source_id: TableId) -> Self {
         let ctx = input.ctx();
         let schema = Schema::new(vec![Field::unnamed(DataType::Int64)]);
-        let base = PlanBase::new_logical(ctx, schema, vec![]);
+        let functional_dependency = FunctionalDependencySet::new();
+        let base = PlanBase::new_logical(ctx, schema, vec![], functional_dependency);
         Self {
             base,
             table_source_name,
